@@ -1,0 +1,39 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Java / Spring Boot
+target/
+*.class
+*.jar
+*.war
+*.ear
+.gradle/
+build/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+
+# Files / uploads
+uploads/
+storage/
+tmp/
+
+# Secrets
+*.pem
+*.key
+*.crt
+
+# Maven Wrapper exceptions
+!.mvn/wrapper/maven-wrapper.jar

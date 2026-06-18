@@ -1,4 +1,4 @@
-\# CareerAI Platform
+# CareerAI Platform
 
 
 
@@ -6,53 +6,45 @@ CareerAI is a Telegram-based AI assistant for AITU Career Center.
 
 
 
-\## MVP
+## MVP
 
 
 
 The MVP provides:
 
-\- Telegram bot for students
+- Telegram bot for students
 
-\- Answers to questions related to Career Center processes
+- Answers to questions related to Career Center processes
 
-\- Fresh vacancies and events from the Career Center Telegram channel
+- Fresh vacancies and events from the Career Center Telegram channel
 
-\- CV analysis from PDF/DOCX resumes
+- CV analysis from PDF/DOCX resumes
 
-\- Google Gemini API integration
+- Google Gemini API integration
 
-\- Java Spring Boot backend
+- Java Spring Boot backend
 
-\- PostgreSQL-based data storage
+- PostgreSQL-based data storage
 
 
 
-\## Repository structure
+## Repository structure
 
 
 
 ```text
-
 careerai-platform/
-
 ├── backend/
-
 ├── frontend/
-
 ├── infrastructure/
-
 ├── docs/
-
 ├── scripts/
-
 └── README.md
-
 ```
 
 
 
-\## Tech Stack
+## Tech Stack
 
 * Java 21
 * Spring Boot 3

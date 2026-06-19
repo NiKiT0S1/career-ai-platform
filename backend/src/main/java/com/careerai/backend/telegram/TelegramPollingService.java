@@ -11,20 +11,23 @@ import tools.jackson.databind.ObjectMapper;
 @Service
 public class TelegramPollingService {
 
+    private static final Logger log = LoggerFactory.getLogger(TelegramPollingService.class);
+
     private final TelegramBotService telegramBotService;
     private final ObjectMapper objectMapper;
     private final LlmProvider llmProvider;
-
-    private static final Logger log = LoggerFactory.getLogger(TelegramPollingService.class);
+    private final TelegramTypingService telegramTypingService;
 
     private long offset = 0;
 
     public TelegramPollingService(TelegramBotService telegramBotService,
                                   ObjectMapper objectMapper,
-                                  LlmProvider llmProvider) {
+                                  LlmProvider llmProvider,
+                                  TelegramTypingService  telegramTypingService) {
         this.telegramBotService = telegramBotService;
         this.objectMapper = objectMapper;
         this.llmProvider = llmProvider;
+        this.telegramTypingService = telegramTypingService;
     }
 
     @Scheduled(fixedDelay = 1000)
@@ -62,6 +65,10 @@ public class TelegramPollingService {
     }
 
     private void processMessage(JsonNode message) {
+        if (isBotMessage(message)) {
+            return;
+        }
+
         if (!message.has("chat")) {
             return;
         }
@@ -77,29 +84,46 @@ public class TelegramPollingService {
 
         log.info("Received Telegram message from chatId={}: {}", chatId, normalizedText);
 
-        if (normalizedText.startsWith("/start")) {
-            telegramBotService.sendMessage(chatId, getStartMessage());
+        if (isStartCommand(normalizedText)) {
+            telegramBotService.sendHtmlMessage(chatId, TelegramMessageTemplates.startMessage());
             return;
         }
 
-        String response = llmProvider.generateAnswer(normalizedText);
+        if (isHelpCommand(normalizedText)) {
+            telegramBotService.sendHtmlMessage(chatId, TelegramMessageTemplates.helpMessage());
+            return;
+        }
 
-        telegramBotService.sendHtmlMessage(chatId, response);
+        if (isAboutCommand(normalizedText)) {
+            telegramBotService.sendHtmlMessage(chatId, TelegramMessageTemplates.aboutMessage());
+            return;
+        }
+
+        TypingActionHandle typingActionHandle = telegramTypingService.startTyping(chatId);
+
+        try {
+            String response = llmProvider.generateAnswer(normalizedText);
+            telegramBotService.sendHtmlMessage(chatId, response);
+        }
+        finally {
+            typingActionHandle.stop();
+        }
     }
 
-    private String getStartMessage() {
-        return """
-                Привет! Я CareerAI — AI-ассистент Центра карьеры и трудоустройства AITU.
-                
-                Я помогу с вопросами по:
-                • производственной практике;
-                • стажировкам;
-                • вакансиям;
-                • дуальному обучению;
-                • дедлайнам;
-                • CV и карьерным рекомендациям.
-                
-                Пока я работаю в тестовом режиме. Напиши мне любой вопрос.
-                """;
+    private boolean isBotMessage(JsonNode message) {
+        return message.has("from")
+                && message.get("from").path("is_bot").asBoolean(false);
+    }
+
+    private boolean isStartCommand(String text) {
+        return text.startsWith("/start");
+    }
+
+    private boolean isHelpCommand(String text) {
+        return text.startsWith("/help");
+    }
+
+    private boolean isAboutCommand(String text) {
+        return text.startsWith("/about");
     }
 }

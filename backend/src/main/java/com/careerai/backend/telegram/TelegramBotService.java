@@ -10,6 +10,7 @@ import org.springframework.web.client.RestClient;
 public class TelegramBotService {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramBotService.class);
+
     private final TelegramBotProperties properties;
     private final RestClient restClient;
 
@@ -26,6 +27,24 @@ public class TelegramBotService {
                 .uri(url)
                 .retrieve()
                 .body(String.class);
+    }
+
+    public void sendTypingAction(long chatId) {
+        String url = "https://api.telegram.org/bot%s/sendChatAction"
+                .formatted(properties.getToken());
+
+        TelegramChatActionRequest request = new TelegramChatActionRequest(chatId, "typing");
+
+        try {
+            restClient.post()
+                    .uri(url)
+                    .body(request)
+                    .retrieve()
+                    .toBodilessEntity();
+        }
+        catch (Exception e) {
+            log.warn("Failed to sent typing action to Telegram chatId={}", chatId);
+        }
     }
 
     public void sendMessage(long chatId, String text) {

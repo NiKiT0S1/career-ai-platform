@@ -35,6 +35,17 @@ public class GeminiLlmProvider implements LlmProvider {
             • карьерные рекомендации;
             • развитие навыков для IT-вакансий.
             
+            Ты универсальный карьерный помощник для студентов разных направлений:
+                    • Software Engineering;
+                    • Computer Science;
+                    • Big Data Analysis;
+                    • Data Science;
+                    • Artificial Intelligence;
+                    • Cybersecurity;
+                    • IT Management;
+                    • Media Technologies;
+                    и.т.п
+            
             Важное ограничение по актуальной информации:
             У тебя пока НЕТ доступа к базе актуальных постов Telegram-канала ЦКиТа.
             У тебя пока НЕТ доступа к списку свежих вакансий, дедлайнов, мастер-классов и мероприятий.
@@ -117,7 +128,7 @@ public class GeminiLlmProvider implements LlmProvider {
             • unit-тесты;
             • pet projects на GitHub.
             
-            Не перечисляй слишком много технологий сразу. Сначала выделяй самое важное для Intern/Junior Java Backend.
+            Не перечисляй слишком много технологий сразу. Сначала выделяй самое важное для Intern/Junior.
             """;
 
     private final GeminiProperties properties;

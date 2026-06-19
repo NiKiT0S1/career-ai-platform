@@ -1,5 +1,6 @@
 package com.careerai.backend.telegram;
 
+import com.careerai.backend.ai.LlmProvider;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
@@ -10,13 +11,16 @@ public class TelegramPollingService {
 
     private final TelegramBotService telegramBotService;
     private final ObjectMapper objectMapper;
+    private final LlmProvider llmProvider;
 
     private long offset = 0;
 
     public TelegramPollingService(TelegramBotService telegramBotService,
-                                  ObjectMapper objectMapper) {
+                                  ObjectMapper objectMapper,
+                                  LlmProvider llmProvider) {
         this.telegramBotService = telegramBotService;
         this.objectMapper = objectMapper;
+        this.llmProvider = llmProvider;
     }
 
     @Scheduled(fixedDelay = 1000)
@@ -55,24 +59,19 @@ public class TelegramPollingService {
 
         long chatId = message.get("chat").get("id").asLong();
         String text = message.has("text") ? message.get("text").asText() : "";
+        String normalizedText = text.trim();
 
-        if (text.isBlank()) {
+        if (normalizedText.isBlank()) {
             telegramBotService.sendMessage(chatId, "Пока я умею обрабатывать только текстовые сообщения.");
             return;
         }
 
-        if (text.equals("/start")) {
+        if (normalizedText.startsWith("/start")) {
             telegramBotService.sendMessage(chatId, getStartMessage());
             return;
         }
 
-        String response = """
-                Я получил твой вопрос:
-                
-                %s
-                
-                Скоро я смогу отвечать на вопросы по практике, стажировкам, вакансиям, CV и другим темам ЦКиТа.
-                """.formatted(text);
+        String response = llmProvider.generateAnswer(normalizedText);
 
         telegramBotService.sendMessage(chatId, response);
     }

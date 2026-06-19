@@ -1,6 +1,8 @@
 package com.careerai.backend.telegram;
 
 import com.careerai.backend.ai.LlmProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
@@ -12,6 +14,8 @@ public class TelegramPollingService {
     private final TelegramBotService telegramBotService;
     private final ObjectMapper objectMapper;
     private final LlmProvider llmProvider;
+
+    private static final Logger log = LoggerFactory.getLogger(TelegramPollingService.class);
 
     private long offset = 0;
 
@@ -39,16 +43,21 @@ public class TelegramPollingService {
             for (JsonNode update : results) {
                 long updateId = update.get("update_id").asLong();
 
-                if (update.has("message")) {
-                    processMessage(update.get("message"));
+                try {
+                    if (update.has("message")) {
+                        processMessage(update.get("message"));
+                    }
                 }
-
-                offset = updateId + 1;
+                catch (Exception e) {
+                    log.error("Error while processing Telegram updateId={}", updateId, e);
+                }
+                finally {
+                    offset = updateId + 1;
+                }
             }
         }
         catch (Exception e) {
-            System.out.println("Error while polling Telegram updates:");
-            e.printStackTrace();
+            log.error("Error while polling Telegram updates", e);
         }
     }
 
@@ -66,6 +75,8 @@ public class TelegramPollingService {
             return;
         }
 
+        log.info("Received Telegram message from chatId={}: {}", chatId, normalizedText);
+
         if (normalizedText.startsWith("/start")) {
             telegramBotService.sendMessage(chatId, getStartMessage());
             return;
@@ -73,7 +84,7 @@ public class TelegramPollingService {
 
         String response = llmProvider.generateAnswer(normalizedText);
 
-        telegramBotService.sendMessage(chatId, response);
+        telegramBotService.sendHtmlMessage(chatId, response);
     }
 
     private String getStartMessage() {

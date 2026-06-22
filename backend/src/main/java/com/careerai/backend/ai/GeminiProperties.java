@@ -8,8 +8,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class GeminiProperties {
 
-    @Value("${gemini.api.key}")
-    private String apiKey;
+    @Value("${gemini.api.keys}")
+    private String apiKeys;
 
     @Value("${gemini.api.model}")
     private String model;

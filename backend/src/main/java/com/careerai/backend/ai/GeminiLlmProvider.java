@@ -9,8 +9,10 @@ import org.springframework.web.client.RestClient;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @Service
 public class GeminiLlmProvider implements LlmProvider {
@@ -134,63 +136,98 @@ public class GeminiLlmProvider implements LlmProvider {
     private final GeminiProperties properties;
     private final ObjectMapper objectMapper;
     private final RestClient restClient;
+    private final GeminiKeyPool geminiKeyPool;
 
-    public GeminiLlmProvider(GeminiProperties properties, ObjectMapper objectMapper) {
+    public GeminiLlmProvider(GeminiProperties properties, ObjectMapper objectMapper, GeminiKeyPool geminiKeyPool) {
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.restClient = RestClient.create();
+        this.geminiKeyPool = geminiKeyPool;
     }
 
     @Override
     public String generateAnswer(String userMessage) {
-        try {
-            String url = "%s/%s:generateContent"
-                    .formatted(properties.getBaseUrl(), properties.getModel());
+        int maxAttempts = 5;
 
-            Map<String, Object> requestBody = Map.of(
-                    "system_instruction", Map.of(
-                            "parts", List.of(
-                                    Map.of("text", SYSTEM_PROMPT)
-                            )
-                    ),
-                    "contents", List.of(
-                            Map.of(
-                                    "parts", List.of(
-                                            Map.of("text", userMessage)
-                                    )
-                            )
-                    )
-            );
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            Optional<String> optionalApiKey = geminiKeyPool.getAvailableKey();
 
-            String responseJson = restClient.post()
-                    .uri(url)
-                    .header("x-goog-api-key", properties.getApiKey())
-                    .header("Content-Type", "application/json")
-                    .body(requestBody)
-                    .retrieve()
-                    .body(String.class);
+            if (optionalApiKey.isEmpty()) {
+                log.warn("No available Gemini API keys at the moment");
+                return """
+                        Сейчас все AI-ключи временно недоступны или упёрлись в лимиты.
+                        
+                        Попробуй повторить вопрос чуть позже.
+                        """;
+            }
 
-            return extractText(responseJson);
+            String apiKey = optionalApiKey.get();
+
+            try {
+                return callGemini(userMessage, apiKey);
+            }
+            catch (HttpServerErrorException.ServiceUnavailable e) {
+                geminiKeyPool.blockKey(apiKey, Duration.ofSeconds(30), "503 Service Unavailable");
+
+//                log.warn("Gemini API is temporarily unavailable: {}", e.getStatusCode());
+                log.warn("Gemini API is temporarily unavailable. Trying another key. Attempt {}/{}", attempt, maxAttempts);
+
+
+//                return "Сейчас AI-модель временно перегружена. Попробуй повторить вопрос через минуту.";
+            }
+            catch (HttpClientErrorException.TooManyRequests e) {
+                geminiKeyPool.blockKey(apiKey, Duration.ofSeconds(60), "429 Too Many Requests");
+//                log.warn("Gemini API quota or rate limit exceeded: {}", e.getStatusCode());
+                log.warn("Gemini API quota/rate limit exceeded. Trying another key. Attempt {}/{}", attempt, maxAttempts);
+
+//                return """
+//            Сейчас лимит AI-запросов временно исчерпан.
+//
+//            Попробуй повторить вопрос чуть позже.
+//            """;
+            }
+            catch (Exception e) {
+                log.error("Unexpected error while calling Gemini API", e);
+
+                return "Сейчас я не могу обработать запрос через AI. Попробуй чуть позже.";
+            }
         }
-        catch (HttpServerErrorException.ServiceUnavailable e) {
-            log.warn("Gemini API is temporarily unavailable: {}", e.getStatusCode());
 
-            return "Сейчас AI-модель временно перегружена. Попробуй повторить вопрос через минуту.";
-        }
-        catch (HttpClientErrorException.TooManyRequests e) {
-            log.warn("Gemini API quota or rate limit exceeded: {}", e.getStatusCode());
+        return """
+                Сейчас AI-модель временно недоступна или лимиты ключей исчерпаны.
+                
+                Попробуй повторить вопрос чуть позже.
+                """;
+    }
 
-            return """
-            Сейчас лимит AI-запросов временно исчерпан.
-            
-            Попробуй повторить вопрос чуть позже.
-            """;
-        }
-        catch (Exception e) {
-            log.error("Unexpected error while calling Gemini API", e);
+    private String callGemini(String userMessage, String apiKey) throws Exception {
+        String url = "%s/%s:generateContent"
+                .formatted(properties.getBaseUrl(), properties.getModel());
 
-            return "Сейчас я не могу обработать запрос через AI. Попробуй чуть позже.";
-        }
+        Map<String, Object> requestBody = Map.of(
+                "system_instruction", Map.of(
+                        "parts", List.of(
+                                Map.of("text", SYSTEM_PROMPT)
+                        )
+                ),
+                "contents", List.of(
+                        Map.of(
+                                "parts", List.of(
+                                        Map.of("text", userMessage)
+                                )
+                        )
+                )
+        );
+
+        String responseJson = restClient.post()
+                .uri(url)
+                .header("x-goog-api-key", apiKey)
+                .header("Content-Type", "application/json")
+                .body(requestBody)
+                .retrieve()
+                .body(String.class);
+
+        return extractText(responseJson);
     }
 
     private String extractText(String responseJson) throws Exception {

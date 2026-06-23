@@ -64,10 +64,19 @@ public class GeminiKeyPool {
     }
 
     private String maskKey(String apiKey) {
-        if (apiKey == null || apiKey.length() < 8) {
+        if (apiKey == null || apiKey.isBlank()) {
             return "****";
         }
 
-        return apiKey.substring(8, 4) + "..." + apiKey.substring(apiKey.length() - 4);
+        String trimmedKey = apiKey.trim();
+
+        if (trimmedKey.length() <= 8) {
+            return "****";
+        }
+
+        String prefix = trimmedKey.substring(0, 4);
+        String suffix = trimmedKey.substring(trimmedKey.length() - 4);
+
+        return prefix + "..." +  suffix;
     }
 }

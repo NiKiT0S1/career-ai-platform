@@ -1,8 +1,14 @@
 package com.careerai.backend.telegram;
 
 import com.careerai.backend.ai.LlmProvider;
+import com.careerai.backend.message.ChatMessageService;
+import com.careerai.backend.runtime.BotRuntimeStateService;
+import com.careerai.backend.user.TelegramUser;
+import com.careerai.backend.user.TelegramUserService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
@@ -13,25 +19,51 @@ public class TelegramPollingService {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramPollingService.class);
 
+    private static final String TELEGRAM_UPDATE_OFFSET_KEY = "telegram_update_offset";
+
     private final TelegramBotService telegramBotService;
     private final ObjectMapper objectMapper;
     private final LlmProvider llmProvider;
     private final TelegramTypingService telegramTypingService;
+    private final TelegramUserService telegramUserService;
+    private final ChatMessageService chatMessageService;
+    private final BotRuntimeStateService botRuntimeStateService;
 
     private long offset = 0;
+    private boolean offsetInitialized = false;
 
     public TelegramPollingService(TelegramBotService telegramBotService,
                                   ObjectMapper objectMapper,
                                   LlmProvider llmProvider,
-                                  TelegramTypingService  telegramTypingService) {
+                                  TelegramTypingService  telegramTypingService,
+                                  TelegramUserService telegramUserService,
+                                  ChatMessageService chatMessageService,
+                                  BotRuntimeStateService botRuntimeStateService) {
         this.telegramBotService = telegramBotService;
         this.objectMapper = objectMapper;
         this.llmProvider = llmProvider;
         this.telegramTypingService = telegramTypingService;
+        this.telegramUserService = telegramUserService;
+        this.chatMessageService = chatMessageService;
+        this.botRuntimeStateService = botRuntimeStateService;
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void initializeOffset() {
+        offset = botRuntimeStateService.getLongValue(TELEGRAM_UPDATE_OFFSET_KEY)
+                .orElse(0L);
+
+        offsetInitialized = true;
+
+        log.info("Telegram polling offset initialized with value={}", offset);
     }
 
     @Scheduled(fixedDelay = 1000)
     public void pollUpdates() {
+        if (!offsetInitialized) {
+            return;
+        }
+
         try {
             String updatesJson = telegramBotService.getUpdates(offset);
             // System.out.println(updatesJson);
@@ -56,6 +88,7 @@ public class TelegramPollingService {
                 }
                 finally {
                     offset = updateId + 1;
+                    botRuntimeStateService.setValue(TELEGRAM_UPDATE_OFFSET_KEY, String.valueOf(offset));
                 }
             }
         }
@@ -74,28 +107,38 @@ public class TelegramPollingService {
         }
 
         long chatId = message.get("chat").get("id").asLong();
+
+        Long telegramMessageId = message.has("message_id")
+                ? message.get("message_id").asLong()
+                : null;
+
         String text = message.has("text") ? message.get("text").asText() : "";
         String normalizedText = text.trim();
 
+        TelegramUser telegramUser = telegramUserService.findOrCreateFromMessage(message);
+
         if (normalizedText.isBlank()) {
-            telegramBotService.sendMessage(chatId, "Пока я умею обрабатывать только текстовые сообщения.");
+            String response = "Пока я умею обрабатывать только текстовые сообщения.";
+            sendAndSavePlainMessage(telegramUser, chatId, response);
             return;
         }
+
+        chatMessageService.saveUserMessage(telegramUser, chatId, normalizedText, telegramMessageId);
 
         log.info("Received Telegram message from chatId={}: {}", chatId, normalizedText);
 
         if (isStartCommand(normalizedText)) {
-            telegramBotService.sendHtmlMessage(chatId, TelegramMessageTemplates.startMessage());
+            sendAndSaveHtmlMessage(telegramUser, chatId, TelegramMessageTemplates.startMessage());
             return;
         }
 
         if (isHelpCommand(normalizedText)) {
-            telegramBotService.sendHtmlMessage(chatId, TelegramMessageTemplates.helpMessage());
+            sendAndSaveHtmlMessage(telegramUser, chatId, TelegramMessageTemplates.helpMessage());
             return;
         }
 
         if (isAboutCommand(normalizedText)) {
-            telegramBotService.sendHtmlMessage(chatId, TelegramMessageTemplates.aboutMessage());
+            sendAndSaveHtmlMessage(telegramUser, chatId, TelegramMessageTemplates.aboutMessage());
             return;
         }
 
@@ -103,11 +146,21 @@ public class TelegramPollingService {
 
         try {
             String response = llmProvider.generateAnswer(normalizedText);
-            telegramBotService.sendHtmlMessage(chatId, response);
+            sendAndSaveHtmlMessage(telegramUser, chatId, response);
         }
         finally {
             typingActionHandle.stop();
         }
+    }
+
+    private void sendAndSaveHtmlMessage(TelegramUser telegramUser, long chatId, String text) {
+        telegramBotService.sendHtmlMessage(chatId, text);
+        chatMessageService.saveAssistantMessage(telegramUser, chatId, text);
+    }
+
+    private void sendAndSavePlainMessage(TelegramUser telegramUser, long chatId, String text) {
+        telegramBotService.sendMessage(chatId, text);
+        chatMessageService.saveAssistantMessage(telegramUser, chatId, text);
     }
 
     private boolean isBotMessage(JsonNode message) {

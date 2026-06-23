@@ -130,6 +130,8 @@ public class GeminiLlmProvider implements LlmProvider {
             • unit-тесты;
             • pet projects на GitHub.
             
+            НО ЭТО ПРОСТО ПРИМЕР, НЕ АКЦЕНТИРУЙСЯ ИМЕННО НА Java
+            
             Не перечисляй слишком много технологий сразу. Сначала выделяй самое важное для Intern/Junior.
             """;
 

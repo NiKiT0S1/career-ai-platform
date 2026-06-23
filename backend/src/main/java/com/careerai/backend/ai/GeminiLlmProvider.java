@@ -2,6 +2,7 @@ package com.careerai.backend.ai;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
@@ -26,6 +27,11 @@ import java.util.Optional;
 public class GeminiLlmProvider implements LlmProvider {
 
     private static final Logger log = LoggerFactory.getLogger(GeminiLlmProvider.class);
+
+    private static final int MAX_GEMINI_ATTEMPTS = 5;
+
+    private static final Duration GEMINI_CONNECT_TIMEOUT = Duration.ofSeconds(10);
+    private static final Duration GEMINI_READ_TIMEOUT = Duration.ofSeconds(45);
 
     private static final String SYSTEM_PROMPT = """
             Ты CareerAI — AI-ассистент Центра карьеры и трудоустройства Astana IT University.
@@ -145,6 +151,9 @@ public class GeminiLlmProvider implements LlmProvider {
             НО ЭТО ПРОСТО ПРИМЕР, НЕ АКЦЕНТИРУЙСЯ ИМЕННО НА Java
             
             Не перечисляй слишком много технологий сразу. Сначала выделяй самое важное для Intern/Junior.
+            
+            Обычный ответ должен быть примерно 700–1200 символов.
+            Если вопрос сложный, можно ответить подробнее, но не растягивай ответ без необходимости.
             """;
 
     private final GeminiProperties properties;
@@ -155,19 +164,28 @@ public class GeminiLlmProvider implements LlmProvider {
     public GeminiLlmProvider(GeminiProperties properties, ObjectMapper objectMapper, GeminiKeyPool geminiKeyPool) {
         this.properties = properties;
         this.objectMapper = objectMapper;
-        this.restClient = RestClient.create();
+//        this.restClient = RestClient.create();
         this.geminiKeyPool = geminiKeyPool;
+
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(GEMINI_CONNECT_TIMEOUT);
+        requestFactory.setReadTimeout(GEMINI_READ_TIMEOUT);
+
+        this.restClient = RestClient.builder()
+                .requestFactory(requestFactory)
+                .build();
     }
 
     @Override
     public String generateAnswer(String userMessage) {
-        int maxAttempts = 5;
+        long requestStartedAt = System.nanoTime();
 
-        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            Optional<String> optionalApiKey = geminiKeyPool.getAvailableKey();
+        for (int attempt = 1; attempt <= MAX_GEMINI_ATTEMPTS; attempt++) {
+            var optionalApiKey = geminiKeyPool.getAvailableKey();
 
             if (optionalApiKey.isEmpty()) {
-                log.warn("No available Gemini API keys at the moment");
+                log.warn("No available Gemini API keys. Gemini request failed after {} ms", elapsedMillis(requestStartedAt));
+
                 return """
                         Сейчас все AI-ключи временно недоступны или упёрлись в лимиты.
                         
@@ -176,36 +194,66 @@ public class GeminiLlmProvider implements LlmProvider {
             }
 
             String apiKey = optionalApiKey.get();
+            long attemptStartedAt = System.nanoTime();
 
             try {
-                return callGemini(userMessage, apiKey);
+                String answer = callGemini(userMessage, apiKey);
+
+                log.info(
+                        "Gemini request succeeded in {} ms. Attempt {}/{}. User message length: {}. Answer length: {}",
+                        elapsedMillis(requestStartedAt),
+                        attempt,
+                        MAX_GEMINI_ATTEMPTS,
+                        safeLength(userMessage),
+                        safeLength(answer)
+                );
+
+                return answer;
             }
             catch (HttpServerErrorException.ServiceUnavailable e) {
                 geminiKeyPool.blockKey(apiKey, Duration.ofSeconds(30), "503 Service Unavailable");
 
-//                log.warn("Gemini API is temporarily unavailable: {}", e.getStatusCode());
-                log.warn("Gemini API is temporarily unavailable. Trying another key. Attempt {}/{}", attempt, maxAttempts);
-
-
-//                return "Сейчас AI-модель временно перегружена. Попробуй повторить вопрос через минуту.";
+                log.warn(
+                        "Gemini API is temporarily unavailable. Trying another key. Attempt {}/{}",
+                        elapsedMillis(attemptStartedAt),
+                        attempt,
+                        MAX_GEMINI_ATTEMPTS
+                );
             }
             catch (HttpClientErrorException.TooManyRequests e) {
                 geminiKeyPool.blockKey(apiKey, Duration.ofSeconds(60), "429 Too Many Requests");
-//                log.warn("Gemini API quota or rate limit exceeded: {}", e.getStatusCode());
-                log.warn("Gemini API quota/rate limit exceeded. Trying another key. Attempt {}/{}", attempt, maxAttempts);
 
-//                return """
-//            Сейчас лимит AI-запросов временно исчерпан.
-//
-//            Попробуй повторить вопрос чуть позже.
-//            """;
+                log.warn(
+                        "Gemini API quota/rate limit exceeded. Trying another key. Attempt {}/{}",
+                        elapsedMillis(attemptStartedAt),
+                        attempt,
+                        MAX_GEMINI_ATTEMPTS
+                );
+            }
+            catch (org.springframework.web.client.ResourceAccessException e) {
+                log.error(
+                        "Gemini request failed by timeout/network error after {} ms",
+                        elapsedMillis(requestStartedAt),
+                        e
+                );
+
+                return """
+                    Сейчас AI-модель слишком долго отвечает или временно недоступна.
+                    
+                    Попробуй повторить вопрос чуть позже.
+                    """;
             }
             catch (Exception e) {
-                log.error("Unexpected error while calling Gemini API", e);
+                log.error("Unexpected error while calling Gemini API after {} ms", elapsedMillis(requestStartedAt), e);
 
                 return "Сейчас я не могу обработать запрос через AI. Попробуй чуть позже.";
             }
         }
+
+        log.warn(
+                "Gemini request failed after {} ms because all attempts were exhausted",
+                elapsedMillis(requestStartedAt)
+        );
 
         return """
                 Сейчас AI-модель временно недоступна или лимиты ключей исчерпаны.
@@ -260,5 +308,13 @@ public class GeminiLlmProvider implements LlmProvider {
         }
 
         return textNode.asText();
+    }
+
+    private long elapsedMillis(long startedAtNanos) {
+        return (System.nanoTime() - startedAtNanos) / 1_000_000;
+    }
+
+    private int safeLength(String value) {
+        return value == null ? 0 : value.length();
     }
 }

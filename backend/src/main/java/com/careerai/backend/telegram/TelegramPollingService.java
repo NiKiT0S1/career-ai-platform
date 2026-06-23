@@ -85,6 +85,7 @@ public class TelegramPollingService {
 
             for (JsonNode update : results) {
                 long updateId = update.get("update_id").asLong();
+                long updateStartedAt = System.nanoTime();
 
                 try {
                     if (update.has("message")) {
@@ -95,6 +96,12 @@ public class TelegramPollingService {
                     log.error("Error while processing Telegram updateId={}", updateId, e);
                 }
                 finally {
+                    log.info(
+                            "Telegram updateId={} finished in {} ms",
+                            updateId,
+                            elapsedMillis(updateStartedAt)
+                    );
+
                     offset = updateId + 1;
                     botRuntimeStateService.setValue(TELEGRAM_UPDATE_OFFSET_KEY, String.valueOf(offset));
                 }
@@ -186,5 +193,9 @@ public class TelegramPollingService {
 
     private boolean isAboutCommand(String text) {
         return text.startsWith("/about");
+    }
+
+    private long elapsedMillis(long startedAtNanos) {
+        return (System.nanoTime() - startedAtNanos) / 1_000_000;
     }
 }

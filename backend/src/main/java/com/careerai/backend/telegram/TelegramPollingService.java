@@ -107,8 +107,12 @@ public class TelegramPollingService {
                 }
             }
         }
+        catch (org.springframework.web.client.ResourceAccessException e) {
+            log.warn("Temporary network error while polling Telegram updates: {}", e.getClass().getSimpleName());
+        }
         catch (Exception e) {
-            log.error("Error while polling Telegram updates", e);
+//            log.error("Error while polling Telegram updates", e);
+            log.error("Error while polling Telegram updates: {}", e.getClass().getSimpleName());
         }
     }
 

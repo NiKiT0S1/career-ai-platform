@@ -14,6 +14,14 @@ import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+/**
+ * Главный сервис для получения сообщений из Telegram через polling.
+ *
+ * Он забирает новые updates из Telegram, восстанавливает и сохраняет offset,
+ * обрабатывает команды /start, /help и /about, сохраняет историю переписки в БД,
+ * показывает статус "печатает..." и отправляет обычные вопросы пользователя в AI-провайдер.
+ */
+
 @Service
 public class TelegramPollingService {
 

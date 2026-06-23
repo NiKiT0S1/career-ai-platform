@@ -7,6 +7,13 @@ import lombok.Setter;
 
 import java.time.LocalDateTime;
 
+/**
+ * Entity-класс для небольших технических значений, которые нужны работающему боту.
+ *
+ * Например, здесь хранится Telegram polling offset в переменной {@code stateKey}, чтобы после перезапуска backend
+ * продолжал читать updates с правильного места и не обрабатывал старые сообщения повторно.
+ */
+
 @Getter
 @Setter
 @NoArgsConstructor

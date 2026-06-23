@@ -8,6 +8,14 @@ import lombok.Setter;
 
 import java.time.LocalDateTime;
 
+/**
+ * Entity-класс одного сообщения в Telegram-чате.
+ *
+ * CareerAI сохраняет как сообщения студентов, так и собственные ответы.
+ * Эта история нужна для будущей кратковременной памяти диалога, анализа взаимодействий
+ * и возможных функций поддержки.
+ */
+
 @Getter
 @Setter
 @NoArgsConstructor

@@ -4,6 +4,13 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Getter;
 
+/**
+ * DTO для запроса к Telegram API методом sendMessage.
+ *
+ * Поддерживает необязательный parse mode, чтобы бот мог отправлять HTML-разметку,
+ * а при необходимости — обычный текст без форматирования.
+ */
+
 @Getter
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class TelegramSendMessageRequest {

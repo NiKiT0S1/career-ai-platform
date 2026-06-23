@@ -6,6 +6,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
+/**
+ * Низкоуровневый сервис для обращения к Telegram Bot API.
+ *
+ * Отвечает за получение updates, отправку обычных сообщений, отправку HTML-сообщений,
+ * fallback на plain text при ошибках форматирования и показ typing-индикатора.
+ */
+
 @Service
 public class TelegramBotService {
 

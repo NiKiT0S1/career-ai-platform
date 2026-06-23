@@ -12,6 +12,17 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
+
+/**
+ * Управляет несколькими API-ключами Gemini в рамках MVP.
+ *
+ * Этот класс выдаёт доступный ключ для AI-запроса и временно блокирует ключи,
+ * которые упёрлись в лимиты или получили временную ошибку от провайдера.
+ * Благодаря этому бот может попробовать другой ключ, не меняя основную логику работы.
+ *
+ * Ежедневно у пользователя имеются лимиты в, примерно, 100 запросов
+ */
+
 @Component
 public class GeminiKeyPool {
 

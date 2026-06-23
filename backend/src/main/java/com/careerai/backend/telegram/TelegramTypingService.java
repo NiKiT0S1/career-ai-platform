@@ -8,6 +8,13 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Сервис для поддержания Telegram-индикатора "печатает...".
+ *
+ * Telegram показывает typing-статус только несколько секунд, поэтому этот сервис
+ * повторяет действие каждые несколько секунд, пока CareerAI ждёт ответ от AI-модели.
+ */
+
 @Service
 public class TelegramTypingService {
 

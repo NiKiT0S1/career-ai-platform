@@ -7,6 +7,14 @@ import lombok.Setter;
 
 import java.time.LocalDateTime;
 
+/**
+ * Entity-класс пользователя Telegram, который взаимодействовал с CareerAI.
+ *
+ * Здесь хранятся базовые данные профиля Telegram: ID пользователя, username,
+ * имя, фамилия и язык. Это позволяет связывать сообщения и будущие функции
+ * персонализации с конкретным студентом.
+ */
+
 @Getter
 @Setter
 @NoArgsConstructor

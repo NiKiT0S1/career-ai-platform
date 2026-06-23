@@ -8,6 +8,14 @@ import org.springframework.context.annotation.Configuration;
 
 import javax.sql.DataSource;
 
+/**
+ * Запускает Flyway-миграции базы данных при старте backend-приложения.
+ *
+ * В этом проекте Flyway отвечает за создание и обновление структуры PostgreSQL
+ * через SQL-файлы из папки {@code src/main/resources/db/migration}.
+ * Такой подход делает структуру БД предсказуемой и версионируемой.
+ */
+
 @Configuration
 public class DatabaseMigrationConfig {
 

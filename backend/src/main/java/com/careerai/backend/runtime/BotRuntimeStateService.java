@@ -6,6 +6,13 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.Optional;
 
+/**
+ * Сервис для управления постоянным техническим состоянием бота.
+ *
+ * Предоставляет простые методы для чтения и обновления key-value записей.
+ * Сейчас основной сценарий — хранение последнего Telegram update offset в PostgreSQL.
+ */
+
 @Service
 public class BotRuntimeStateService {
 

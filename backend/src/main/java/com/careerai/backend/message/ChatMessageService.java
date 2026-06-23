@@ -6,6 +6,14 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 
+/**
+ * Сервис для работы с историей сообщений.
+ *
+ * Он сохраняет входящие сообщения студентов и ответы CareerAI в базу данных.
+ * Сейчас это нужно для фиксации истории общения, а в будущем может стать основой
+ * для памяти диалога и анализа частых вопросов.
+ */
+
 @Service
 public class ChatMessageService {
 

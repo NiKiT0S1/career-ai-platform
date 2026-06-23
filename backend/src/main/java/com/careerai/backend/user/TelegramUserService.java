@@ -6,6 +6,14 @@ import tools.jackson.databind.JsonNode;
 
 import java.time.LocalDateTime;
 
+/**
+ * Сервис для синхронизации пользователя Telegram с базой данных.
+ *
+ * Когда приходит сообщение из Telegram, сервис ищет существующего пользователя
+ * или создаёт нового. Также он обновляет поля профиля, потому что username,
+ * имя или язык пользователя могут измениться в Telegram.
+ */
+
 @Service
 public class TelegramUserService {
 

@@ -1,5 +1,12 @@
 package com.careerai.backend.telegram;
 
+/**
+ * Хранит шаблоны стандартных сообщений бота.
+ *
+ * Эти ответы используются для команд и простых локальных сценариев, которым не нужен
+ * запрос к AI-модели: /start, /help, /about и сообщение об отсутствии свежей базы ЦКиТа.
+ */
+
 public final class TelegramMessageTemplates {
 
     private TelegramMessageTemplates() {

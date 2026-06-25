@@ -2,6 +2,7 @@ package com.careerai.backend.telegram;
 
 import com.careerai.backend.ai.LlmProvider;
 import com.careerai.backend.ai.LlmResponse;
+import com.careerai.backend.channel.TelegramChannelPostAnswerService;
 import com.careerai.backend.channel.TelegramChannelPostService;
 import com.careerai.backend.message.ChatMessageService;
 import com.careerai.backend.runtime.BotRuntimeStateService;
@@ -40,6 +41,7 @@ public class TelegramPollingService {
     private final BotRuntimeStateService botRuntimeStateService;
     private final TelegramHtmlSanitizer telegramHtmlSanitizer;
     private final TelegramChannelPostService telegramChannelPostService;
+    private final TelegramChannelPostAnswerService telegramChannelPostAnswerService;
 
     private long offset = 0;
     private boolean offsetInitialized = false;
@@ -52,7 +54,8 @@ public class TelegramPollingService {
                                   ChatMessageService chatMessageService,
                                   BotRuntimeStateService botRuntimeStateService,
                                   TelegramHtmlSanitizer telegramHtmlSanitizer,
-                                  TelegramChannelPostService telegramChannelPostService) {
+                                  TelegramChannelPostService telegramChannelPostService,
+                                  TelegramChannelPostAnswerService telegramChannelPostAnswerService) {
         this.telegramBotService = telegramBotService;
         this.objectMapper = objectMapper;
         this.llmProvider = llmProvider;
@@ -62,6 +65,7 @@ public class TelegramPollingService {
         this.botRuntimeStateService = botRuntimeStateService;
         this.telegramHtmlSanitizer = telegramHtmlSanitizer;
         this.telegramChannelPostService = telegramChannelPostService;
+        this.telegramChannelPostAnswerService = telegramChannelPostAnswerService;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -182,6 +186,13 @@ public class TelegramPollingService {
 
         if (isAboutCommand(normalizedText)) {
             sendAndSaveHtmlMessage(telegramUser, chatId, TelegramMessageTemplates.aboutMessage());
+            return;
+        }
+
+        var channelPostAnswer = telegramChannelPostAnswerService.buildAnswerIfRelevant(normalizedText);
+
+        if (channelPostAnswer.isPresent()) {
+            sendAndSaveHtmlMessage(telegramUser, chatId, channelPostAnswer.get());
             return;
         }
 

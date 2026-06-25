@@ -10,6 +10,7 @@ import org.springframework.web.client.RestClient;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -77,59 +78,100 @@ public class GeminiLlmProvider implements LlmProvider {
                 String answer = callGemini(userMessage, apiKey);
 
                 log.info(
-                        "Gemini request succeeded in {} ms. Attempt {}/{}. User message length: {}. Answer length: {}",
+                        "Gemini request succeeded in {} ms. Attempt {}/{}. Model: {}. User message length: {}. Answer length: {}",
                         elapsedMillis(requestStartedAt),
                         attempt,
                         MAX_GEMINI_ATTEMPTS,
+                        properties.getModel(),
                         safeLength(userMessage),
                         safeLength(answer)
                 );
 
                 return answer;
             }
-            catch (HttpServerErrorException.ServiceUnavailable e) {
-                geminiKeyPool.blockKey(apiKey, Duration.ofSeconds(30), "503 Service Unavailable");
-
-                log.warn(
-                        "Gemini API is temporarily unavailable. Trying another key. Attempt {}/{}",
-                        elapsedMillis(attemptStartedAt),
-                        attempt,
-                        MAX_GEMINI_ATTEMPTS
+            catch (HttpClientErrorException.NotFound e) {
+                log.error(
+                        "Gemini model was not found. Check gemini.api.model value. Model: {}",
+                        properties.getModel(),
+                        e
                 );
+
+                return """
+                        Сейчас AI-модель настроена некорректно.
+                        
+                        Проверь значение gemini.api.model в application.properties.
+                        """;
             }
             catch (HttpClientErrorException.TooManyRequests e) {
                 geminiKeyPool.blockKey(apiKey, Duration.ofSeconds(60), "429 Too Many Requests");
 
                 log.warn(
-                        "Gemini API quota/rate limit exceeded. Trying another key. Attempt {}/{}",
+                        "Gemini request got 429 after {} ms. Trying another key. Attempt {}/{}",
+                        elapsedMillis(attemptStartedAt),
+                        attempt,
+                        MAX_GEMINI_ATTEMPTS
+                );
+            }
+            catch (HttpServerErrorException.ServiceUnavailable e) {
+                geminiKeyPool.blockKey(apiKey, Duration.ofSeconds(30), "503 Service Unavailable");
+
+                log.warn(
+                        "Gemini request got 503 after {} ms. Trying another key. Attempt {}/{}",
                         elapsedMillis(attemptStartedAt),
                         attempt,
                         MAX_GEMINI_ATTEMPTS
                 );
             }
             catch (org.springframework.web.client.ResourceAccessException e) {
+                if (isTimeoutException(e)) {
+                    log.warn(
+                            "Gemini request timed out after {} ms. Model: {}. Attempt {}/{}",
+                            elapsedMillis(requestStartedAt),
+                            properties.getModel(),
+                            attempt,
+                            MAX_GEMINI_ATTEMPTS
+                    );
+
+                    return """
+                            AI-модель сейчас отвечает слишком долго.
+                            
+                            Попробуй повторить вопрос чуть позже.
+                            """;
+                }
+
                 log.error(
-                        "Gemini request failed by timeout/network error after {} ms",
+                        "Gemini network error after {} ms. Model: {}",
                         elapsedMillis(requestStartedAt),
+                        properties.getModel(),
                         e
                 );
 
                 return """
-                    Сейчас AI-модель слишком долго отвечает или временно недоступна.
-                    
-                    Попробуй повторить вопрос чуть позже.
-                    """;
+                        Сейчас возникла сетевая ошибка при обращении к AI-модели.
+                        
+                        Попробуй повторить вопрос чуть позже.
+                        """;
             }
             catch (Exception e) {
-                log.error("Unexpected error while calling Gemini API after {} ms", elapsedMillis(requestStartedAt), e);
+                log.error(
+                        "Unexpected error while calling Gemini API after {} ms. Model: {}",
+                        elapsedMillis(requestStartedAt),
+                        properties.getModel(),
+                        e
+                );
 
-                return "Сейчас я не могу обработать запрос через AI. Попробуй чуть позже.";
+                return """
+                        Сейчас я не могу обработать запрос через AI.
+                        
+                        Попробуй чуть позже.
+                        """;
             }
         }
 
         log.warn(
-                "Gemini request failed after {} ms because all attempts were exhausted",
-                elapsedMillis(requestStartedAt)
+                "Gemini request failed after {} ms because all attempts were exhausted. Model: {}",
+                elapsedMillis(requestStartedAt),
+                properties.getModel()
         );
 
         return """
@@ -155,6 +197,11 @@ public class GeminiLlmProvider implements LlmProvider {
                                         Map.of("text", userMessage)
                                 )
                         )
+                ),
+                "generationConfig", Map.of(
+                        "temperature", 0.55,
+                        "topP", 0.9,
+                        "maxOutputTokens", 900
                 )
         );
 
@@ -181,10 +228,30 @@ public class GeminiLlmProvider implements LlmProvider {
                 .path("text");
 
         if (textNode.isMissingNode() || textNode.asText().isBlank()) {
-            return "Я получил ответ от AI, но не смог корректно извлечь текст.";
+            log.warn("Gemini response did not contain expected text content: {}", responseJson);
+
+            return """
+                    Я получил ответ от AI, но не смог корректно извлечь текст.
+                    
+                    Попробуй переформулировать вопрос.
+                    """;
         }
 
         return textNode.asText();
+    }
+
+    private boolean isTimeoutException(Throwable throwable) {
+        Throwable current = throwable;
+
+        while (current != null) {
+            if (current instanceof SocketTimeoutException) {
+                return true;
+            }
+
+            current = current.getCause();
+        }
+
+        return false;
     }
 
     private long elapsedMillis(long startedAtNanos) {

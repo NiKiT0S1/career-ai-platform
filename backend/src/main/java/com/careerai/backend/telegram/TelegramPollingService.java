@@ -2,6 +2,7 @@ package com.careerai.backend.telegram;
 
 import com.careerai.backend.ai.LlmProvider;
 import com.careerai.backend.ai.LlmResponse;
+import com.careerai.backend.channel.TelegramChannelPostService;
 import com.careerai.backend.message.ChatMessageService;
 import com.careerai.backend.runtime.BotRuntimeStateService;
 import com.careerai.backend.user.TelegramUser;
@@ -38,6 +39,7 @@ public class TelegramPollingService {
     private final ChatMessageService chatMessageService;
     private final BotRuntimeStateService botRuntimeStateService;
     private final TelegramHtmlSanitizer telegramHtmlSanitizer;
+    private final TelegramChannelPostService telegramChannelPostService;
 
     private long offset = 0;
     private boolean offsetInitialized = false;
@@ -49,7 +51,8 @@ public class TelegramPollingService {
                                   TelegramUserService telegramUserService,
                                   ChatMessageService chatMessageService,
                                   BotRuntimeStateService botRuntimeStateService,
-                                  TelegramHtmlSanitizer telegramHtmlSanitizer) {
+                                  TelegramHtmlSanitizer telegramHtmlSanitizer,
+                                  TelegramChannelPostService telegramChannelPostService) {
         this.telegramBotService = telegramBotService;
         this.objectMapper = objectMapper;
         this.llmProvider = llmProvider;
@@ -58,6 +61,7 @@ public class TelegramPollingService {
         this.chatMessageService = chatMessageService;
         this.botRuntimeStateService = botRuntimeStateService;
         this.telegramHtmlSanitizer = telegramHtmlSanitizer;
+        this.telegramChannelPostService = telegramChannelPostService;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -94,6 +98,22 @@ public class TelegramPollingService {
                 try {
                     if (update.has("message")) {
                         processMessage(update.get("message"));
+                    }
+
+                    if (update.has("channel_post")) {
+                        telegramChannelPostService.saveOrUpdateChannelPost(
+                                update.get("channel_post"),
+                                update.toString(),
+                                false
+                        );
+                    }
+
+                    if (update.has("edited_channel_post")) {
+                        telegramChannelPostService.saveOrUpdateChannelPost(
+                                update.get("edited_channel_post"),
+                                update.toString(),
+                                true
+                        );
                     }
                 }
                 catch (Exception e) {

@@ -29,7 +29,7 @@ public class GeminiLlmProvider implements LlmProvider {
 
     private static final Logger log = LoggerFactory.getLogger(GeminiLlmProvider.class);
 
-    private static final int MAX_GEMINI_ATTEMPTS = 5;
+    private static final int MAX_GEMINI_ATTEMPTS = 2;
 
     private static final Duration GEMINI_CONNECT_TIMEOUT = Duration.ofSeconds(10);
     private static final Duration GEMINI_READ_TIMEOUT = Duration.ofSeconds(45);
@@ -55,7 +55,7 @@ public class GeminiLlmProvider implements LlmProvider {
     }
 
     @Override
-    public String generateAnswer(String userMessage) {
+    public LlmResponse generateAnswer(String userMessage) {
         long requestStartedAt = System.nanoTime();
 
         for (int attempt = 1; attempt <= MAX_GEMINI_ATTEMPTS; attempt++) {
@@ -64,11 +64,16 @@ public class GeminiLlmProvider implements LlmProvider {
             if (optionalApiKey.isEmpty()) {
                 log.warn("No available Gemini API keys. Gemini request failed after {} ms", elapsedMillis(requestStartedAt));
 
-                return """
-                        Сейчас все AI-ключи временно недоступны или упёрлись в лимиты.
+                return LlmResponse.failure("""
+                        Сейчас все Gemini-ключи временно недоступны или упёрлись в лимиты.
                         
                         Попробуй повторить вопрос чуть позже.
-                        """;
+                        """,
+                        "Gemini",
+                        properties.getModel(),
+                        LlmErrorType.NO_AVAILABLE_KEYS,
+                        elapsedMillis(requestStartedAt)
+                );
             }
 
             String apiKey = optionalApiKey.get();
@@ -87,7 +92,12 @@ public class GeminiLlmProvider implements LlmProvider {
                         safeLength(answer)
                 );
 
-                return answer;
+                return LlmResponse.success(
+                        answer,
+                        "Gemini",
+                        properties.getModel(),
+                        elapsedMillis(requestStartedAt)
+                );
             }
             catch (HttpClientErrorException.NotFound e) {
                 log.error(
@@ -96,11 +106,16 @@ public class GeminiLlmProvider implements LlmProvider {
                         e
                 );
 
-                return """
-                        Сейчас AI-модель настроена некорректно.
+                return LlmResponse.failure("""
+                        Сейчас Gemini-модель настроена некорректно.
                         
                         Проверь значение gemini.api.model в application.properties.
-                        """;
+                        """,
+                        "Gemini",
+                        properties.getModel(),
+                        LlmErrorType.MODEL_NOT_FOUND,
+                        elapsedMillis(requestStartedAt)
+                );
             }
             catch (HttpClientErrorException.TooManyRequests e) {
                 geminiKeyPool.blockKey(apiKey, Duration.ofSeconds(60), "429 Too Many Requests");
@@ -132,11 +147,16 @@ public class GeminiLlmProvider implements LlmProvider {
                             MAX_GEMINI_ATTEMPTS
                     );
 
-                    return """
-                            AI-модель сейчас отвечает слишком долго.
+                    return LlmResponse.failure("""
+                            Gemini-модель сейчас отвечает слишком долго.
                             
                             Попробуй повторить вопрос чуть позже.
-                            """;
+                            """,
+                            "Gemini",
+                            properties.getModel(),
+                            LlmErrorType.TIMEOUT,
+                            elapsedMillis(requestStartedAt)
+                    );
                 }
 
                 log.error(
@@ -146,11 +166,16 @@ public class GeminiLlmProvider implements LlmProvider {
                         e
                 );
 
-                return """
-                        Сейчас возникла сетевая ошибка при обращении к AI-модели.
+                return LlmResponse.failure("""
+                        Сейчас возникла сетевая ошибка при обращении к Gemini-модели.
                         
                         Попробуй повторить вопрос чуть позже.
-                        """;
+                        """,
+                        "Gemini",
+                        properties.getModel(),
+                        LlmErrorType.NETWORK_ERROR,
+                        elapsedMillis(requestStartedAt)
+                );
             }
             catch (Exception e) {
                 log.error(
@@ -160,11 +185,16 @@ public class GeminiLlmProvider implements LlmProvider {
                         e
                 );
 
-                return """
-                        Сейчас я не могу обработать запрос через AI.
+                return LlmResponse.failure("""
+                        Сейчас я не могу обработать запрос через Gemini.
                         
                         Попробуй чуть позже.
-                        """;
+                        """,
+                        "Gemini",
+                        properties.getModel(),
+                        LlmErrorType.UNEXPECTED_ERROR,
+                        elapsedMillis(requestStartedAt)
+                );
             }
         }
 
@@ -174,11 +204,16 @@ public class GeminiLlmProvider implements LlmProvider {
                 properties.getModel()
         );
 
-        return """
+        return LlmResponse.failure("""
                 Сейчас AI-модель временно недоступна или лимиты ключей исчерпаны.
                 
                 Попробуй повторить вопрос чуть позже.
-                """;
+                """,
+                "Gemini",
+                properties.getModel(),
+                LlmErrorType.SERVICE_UNAVAILABLE,
+                elapsedMillis(requestStartedAt)
+        );
     }
 
     private String callGemini(String userMessage, String apiKey) throws Exception {

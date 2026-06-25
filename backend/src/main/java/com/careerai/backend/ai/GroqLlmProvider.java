@@ -48,17 +48,22 @@ public class GroqLlmProvider implements LlmProvider {
     }
 
     @Override
-    public String generateAnswer(String userMessage) {
+    public LlmResponse generateAnswer(String userMessage) {
         long startedAt = System.nanoTime();
 
         if (properties.getKey() == null || properties.getKey().isBlank()) {
             log.warn("Groq API key is not configured");
 
-            return """
+            return LlmResponse.failure("""
                     Groq API key не настроен.
                     
                     Проверь переменную окружения GROQ_API_KEY.
-                    """;
+                    """,
+                    "Groq",
+                    properties.getModel(),
+                    LlmErrorType.UNEXPECTED_ERROR,
+                    elapsedMillis(startedAt)
+            );
         }
 
         try {
@@ -72,32 +77,68 @@ public class GroqLlmProvider implements LlmProvider {
                     safeLength(answer)
             );
 
-            return answer;
-        } catch (HttpClientErrorException.TooManyRequests e) {
+            return LlmResponse.success(
+                    answer,
+                    "Groq",
+                    properties.getModel(),
+                    elapsedMillis(startedAt)
+            );
+        }
+        catch (HttpClientErrorException.TooManyRequests e) {
             log.warn(
                     "Groq request got 429 after {} ms. Model: {}",
                     elapsedMillis(startedAt),
                     properties.getModel()
             );
 
-            return """
+            return LlmResponse.failure("""
                     Groq временно ограничил количество запросов.
                     
                     Попробуй повторить вопрос чуть позже.
-                    """;
-        } catch (HttpClientErrorException.NotFound e) {
+                    """,
+                    "Groq",
+                    properties.getModel(),
+                    LlmErrorType.RATE_LIMIT,
+                    elapsedMillis(startedAt)
+            );
+        }
+        catch (HttpClientErrorException.NotFound e) {
             log.error(
                     "Groq model was not found. Check groq.api.model value. Model: {}",
                     properties.getModel(),
                     e
             );
 
-            return """
+            return LlmResponse.failure("""
                     Groq-модель настроена некорректно.
                     
                     Проверь значение groq.api.model в application.properties.
-                    """;
-        } catch (Exception e) {
+                    """,
+                    "Groq",
+                    properties.getModel(),
+                    LlmErrorType.MODEL_NOT_FOUND,
+                    elapsedMillis(startedAt)
+            );
+        }
+        catch (org.springframework.web.client.ResourceAccessException e) {
+            log.warn(
+                    "Groq request failed by timeout/network error after {} ms. Model: {}",
+                    elapsedMillis(startedAt),
+                    properties.getModel()
+            );
+
+            return LlmResponse.failure("""
+                Groq сейчас отвечает слишком долго или временно недоступен.
+                
+                Попробуй повторить вопрос чуть позже.
+                """,
+                "Groq",
+                properties.getModel(),
+                LlmErrorType.TIMEOUT,
+                elapsedMillis(startedAt)
+            );
+        }
+        catch (Exception e) {
             log.error(
                     "Unexpected error while calling Groq API after {} ms. Model: {}",
                     elapsedMillis(startedAt),
@@ -105,11 +146,16 @@ public class GroqLlmProvider implements LlmProvider {
                     e
             );
 
-            return """
+            return LlmResponse.failure("""
                     Сейчас я не могу обработать запрос через Groq.
                     
                     Попробуй чуть позже.
-                    """;
+                    """,
+                    "Groq",
+                    properties.getModel(),
+                    LlmErrorType.UNEXPECTED_ERROR,
+                    elapsedMillis(startedAt)
+            );
         }
     }
 

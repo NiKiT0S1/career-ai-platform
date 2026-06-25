@@ -8,9 +8,9 @@ import org.springframework.stereotype.Service;
 /**
  * Основная точка входа для генерации AI-ответов.
  *
- * Этот класс выбирает реального AI-провайдера по настройке {@code llm.provider}.
- * Благодаря этому Telegram-логика зависит только от {@link LlmProvider}, а backend
- * может переключаться между Gemini и Groq через application.properties.
+ * Если активный провайдер — Gemini, backend сначала пробует Gemini.
+ * Если Gemini не смогла ответить из-за лимитов, 503, timeout или сетевой ошибки,
+ * backend автоматически пробует fallback через Groq.
  */
 
 @Primary
@@ -34,16 +34,64 @@ public class ActiveLlmProvider implements LlmProvider {
     }
 
     @Override
-    public String generateAnswer(String userMessage) {
+    public LlmResponse generateAnswer(String userMessage) {
         return switch (llmProperties.getProvider()) {
-            case GEMINI -> {
-                log.info("Active LLM provider: Gemini");
-                yield geminiLlmProvider.generateAnswer(userMessage);
-            }
-            case GROQ ->  {
-                log.info("Active LLM provider: Groq");
-                yield groqLlmProvider.generateAnswer(userMessage);
-            }
+            case GEMINI -> generateWithGeminiAndGroqFallback(userMessage);
+            case GROQ -> generateWithGroqOnly(userMessage);
         };
+    }
+
+    private LlmResponse generateWithGeminiAndGroqFallback(String userMessage) {
+        log.info("Active LLM provider: Gemini");
+
+        LlmResponse geminiResponse = geminiLlmProvider.generateAnswer(userMessage);
+
+        if (geminiResponse.success()) {
+            return geminiResponse;
+        }
+
+        log.warn(
+                "Primary Gemini provider failed. Trying Groq fallback. Gemini model: {}. Error type: {}. Elapsed: {} ms",
+                geminiResponse.model(),
+                geminiResponse.errorType(),
+                geminiResponse.elapsedMillis()
+        );
+
+        LlmResponse groqResponse = groqLlmProvider.generateAnswer(userMessage);
+
+        if (groqResponse.success()) {
+            log.info(
+                    "Groq fallback succeeded. Model: {}. Elapsed: {} ms",
+                    groqResponse.model(),
+                    groqResponse.elapsedMillis()
+            );
+
+            return groqResponse;
+        }
+
+        log.error(
+                "Both LLM providers failed. Gemini error: {}. Groq error: {}",
+                geminiResponse.errorType(),
+                groqResponse.errorType()
+        );
+
+        return LlmResponse.failure(
+                """
+                Сейчас AI-ассистент временно недоступен.
+                
+                Основная модель и резервная модель не смогли обработать запрос.
+                Попробуй повторить вопрос чуть позже.
+                """,
+                "ActiveLlmProvider",
+                "Gemini -> Groq",
+                groqResponse.errorType(),
+                geminiResponse.elapsedMillis() + groqResponse.elapsedMillis()
+        );
+    }
+
+    private LlmResponse generateWithGroqOnly(String userMessage) {
+        log.info("Active LLM provider: Groq");
+
+        return groqLlmProvider.generateAnswer(userMessage);
     }
 }

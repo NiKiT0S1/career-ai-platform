@@ -1,6 +1,7 @@
 package com.careerai.backend.telegram;
 
 import com.careerai.backend.ai.LlmProvider;
+import com.careerai.backend.ai.LlmResponse;
 import com.careerai.backend.message.ChatMessageService;
 import com.careerai.backend.runtime.BotRuntimeStateService;
 import com.careerai.backend.user.TelegramUser;
@@ -36,6 +37,7 @@ public class TelegramPollingService {
     private final TelegramUserService telegramUserService;
     private final ChatMessageService chatMessageService;
     private final BotRuntimeStateService botRuntimeStateService;
+    private final TelegramHtmlSanitizer telegramHtmlSanitizer;
 
     private long offset = 0;
     private boolean offsetInitialized = false;
@@ -46,7 +48,8 @@ public class TelegramPollingService {
                                   TelegramTypingService  telegramTypingService,
                                   TelegramUserService telegramUserService,
                                   ChatMessageService chatMessageService,
-                                  BotRuntimeStateService botRuntimeStateService) {
+                                  BotRuntimeStateService botRuntimeStateService,
+                                  TelegramHtmlSanitizer telegramHtmlSanitizer) {
         this.telegramBotService = telegramBotService;
         this.objectMapper = objectMapper;
         this.llmProvider = llmProvider;
@@ -54,6 +57,7 @@ public class TelegramPollingService {
         this.telegramUserService = telegramUserService;
         this.chatMessageService = chatMessageService;
         this.botRuntimeStateService = botRuntimeStateService;
+        this.telegramHtmlSanitizer = telegramHtmlSanitizer;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -164,8 +168,8 @@ public class TelegramPollingService {
         TypingActionHandle typingActionHandle = telegramTypingService.startTyping(chatId);
 
         try {
-            String response = llmProvider.generateAnswer(normalizedText);
-            sendAndSaveHtmlMessage(telegramUser, chatId, response);
+            LlmResponse response = llmProvider.generateAnswer(normalizedText);
+            sendAndSaveHtmlMessage(telegramUser, chatId, response.text());
         }
         finally {
             typingActionHandle.stop();
@@ -173,8 +177,10 @@ public class TelegramPollingService {
     }
 
     private void sendAndSaveHtmlMessage(TelegramUser telegramUser, long chatId, String text) {
-        telegramBotService.sendHtmlMessage(chatId, text);
-        chatMessageService.saveAssistantMessage(telegramUser, chatId, text);
+        String sanitizedText = telegramHtmlSanitizer.sanitizeHtml(text);
+
+        telegramBotService.sendHtmlMessage(chatId, sanitizedText);
+        chatMessageService.saveAssistantMessage(telegramUser, chatId, sanitizedText);
     }
 
     private void sendAndSavePlainMessage(TelegramUser telegramUser, long chatId, String text) {

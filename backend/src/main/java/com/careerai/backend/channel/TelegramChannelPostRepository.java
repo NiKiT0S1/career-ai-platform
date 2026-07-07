@@ -10,8 +10,8 @@ import java.util.Optional;
 /**
  * Репозиторий для Telegram-постов канала.
  *
- * Используется для сохранения новых постов и обновления уже существующих,
- * если Telegram прислал edited_channel_post.
+ * Используется для сохранения новых постов, обновления отредактированных постов
+ * и поиска по сохранённым объявлениям.
  */
 
 public interface TelegramChannelPostRepository extends JpaRepository<TelegramChannelPost, Long> {
@@ -22,18 +22,8 @@ public interface TelegramChannelPostRepository extends JpaRepository<TelegramCha
             SELECT post
             FROM TelegramChannelPost post
             WHERE post.text IS NOT NULL
-              AND (
-                    LOWER(post.text) LIKE '%ваканс%'
-                 OR LOWER(post.text) LIKE '%стажир%'
-                 OR LOWER(post.text) LIKE '%intern%'
-                 OR LOWER(post.text) LIKE '%junior%'
-                 OR LOWER(post.text) LIKE '%middle%'
-                 OR LOWER(post.text) LIKE '%senior%'
-                 OR LOWER(post.text) LIKE '%работ%'
-                 OR LOWER(post.text) LIKE '%позици%'
-                 OR LOWER(post.text) LIKE '%дедлайн%'
-              )
+              AND LENGTH(TRIM(post.text)) > 0
             ORDER BY COALESCE(post.editedAt, post.postedAt, post.createdAt) DESC
             """)
-    List<TelegramChannelPost> findLatestOpportunityPosts(Pageable pageable);
+    List<TelegramChannelPost> findLatestTextPosts(Pageable pageable);
 }

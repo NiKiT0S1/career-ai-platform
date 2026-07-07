@@ -17,16 +17,15 @@ import java.util.Set;
 /**
  * Формирует ответы на основе сохранённых постов Telegram-канала.
  *
- * Сервис сначала ищет релевантные посты в PostgreSQL, затем передаёт найденный
- * контекст в LLM. Благодаря этому бот отвечает не "из головы", а на основе
- * фактических объявлений из Telegram-канала ЦКиТа.
+ * Сервис сначала анализирует вопрос пользователя через LLM-router,
+ * затем при необходимости достаёт последние посты Telegram-канала
+ * и передаёт их в LLM как фактический контекст.
  */
 
 @Service
 public class TelegramChannelPostAnswerService {
 
-    private static final int MAX_CANDIDATE_POSTS = 20;
-    private static final int MAX_CONTEXT_POSTS = 5;
+    private static final int MAX_CONTEXT_POSTS = 15;
 
     private static final ZoneId ASTANA_ZONE_ID = ZoneId.of("Asia/Almaty");
 
@@ -34,37 +33,41 @@ public class TelegramChannelPostAnswerService {
             DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm");
 
     private final TelegramChannelPostRepository repository;
+    private final ChannelQueryAnalyzer queryAnalyzer;
     private final LlmProvider llmProvider;
 
     public TelegramChannelPostAnswerService(
             TelegramChannelPostRepository repository,
+            ChannelQueryAnalyzer queryAnalyzer,
             LlmProvider llmProvider
     ) {
         this.repository = repository;
+        this.queryAnalyzer = queryAnalyzer;
         this.llmProvider = llmProvider;
     }
 
     public Optional<String> buildAnswerIfRelevant(String userMessage) {
-        if (!isChannelPostSearchRequest(userMessage)) {
+        ChannelQueryAnalysis analysis = queryAnalyzer.analyze(userMessage);
+
+//        if (!analysis.requiresChannelPosts()) {
+//            return Optional.empty();
+//        }
+        if (!shouldUseChannelPosts(analysis)) {
             return Optional.empty();
         }
 
-        List<TelegramChannelPost> candidates = repository.findLatestOpportunityPosts(
-                PageRequest.of(0, MAX_CANDIDATE_POSTS)
+        List<TelegramChannelPost> posts = repository.findLatestTextPosts(
+                PageRequest.of(0, MAX_CONTEXT_POSTS)
         );
 
-        if (candidates.isEmpty()) {
+        if (posts.isEmpty()) {
             return Optional.of("""
                     <b>Свежие объявления из Telegram-канала ЦКиТа</b>
-                    Пока в сохранённой базе нет постов, похожих на вакансии, стажировки или важные объявления.
-                    
-                    Если объявление только что опубликовали, подожди немного: backend должен получить его через Telegram updates.
+                    Пока в сохранённой базе нет текстовых постов из Telegram-канала.
                     """);
         }
 
-        List<TelegramChannelPost> selectedPosts = selectRelevantPosts(userMessage, candidates);
-
-        String ragPrompt = buildRagPrompt(userMessage, selectedPosts);
+        String ragPrompt = buildRagPrompt(userMessage, analysis, posts);
 
         LlmResponse llmResponse = llmProvider.generateAnswer(ragPrompt);
 
@@ -72,174 +75,40 @@ public class TelegramChannelPostAnswerService {
             return Optional.of(llmResponse.text());
         }
 
-        return Optional.of(buildDirectFallbackAnswer(selectedPosts));
+        return Optional.of(buildDirectFallbackAnswer(posts));
     }
 
-    private boolean isChannelPostSearchRequest(String text) {
-        String normalizedText = text.toLowerCase();
-
-        return normalizedText.contains("ваканс")
-                || normalizedText.contains("стажиров")
-                || normalizedText.contains("intern")
-                || normalizedText.contains("junior")
-                || normalizedText.contains("работ")
-                || normalizedText.contains("практик")
-                || normalizedText.contains("дедлайн")
-                || normalizedText.contains("что нового")
-                || normalizedText.contains("свеж")
-                || normalizedText.contains("объявлен")
-                || normalizedText.contains("канал");
-    }
-
-    private List<TelegramChannelPost> selectRelevantPosts(
-            String userMessage,
-            List<TelegramChannelPost> candidates
-    ) {
-        Set<String> searchTerms = extractSearchTerms(userMessage);
-
-        List<ScoredPost> scoredPosts = candidates.stream()
-                .map(post -> new ScoredPost(post, calculateScore(post, searchTerms)))
-                .sorted(Comparator
-                        .comparingInt(ScoredPost::score)
-                        .reversed()
-                        .thenComparing(
-                                scoredPost -> getEffectiveDate(scoredPost.post()),
-                                Comparator.nullsLast(Comparator.reverseOrder())
-                        )
-                )
-                .toList();
-
-        boolean hasPositiveScore = scoredPosts.stream()
-                .anyMatch(scoredPost -> scoredPost.score() > 0);
-
-        return scoredPosts.stream()
-                .filter(scoredPost -> !hasPositiveScore || scoredPost.score() > 0)
-                .limit(MAX_CONTEXT_POSTS)
-                .map(ScoredPost::post)
-                .toList();
-    }
-
-    private Set<String> extractSearchTerms(String userMessage) {
-        String normalizedText = userMessage.toLowerCase();
-
-        Set<String> terms = new LinkedHashSet<>();
-
-        if (normalizedText.contains("ваканс")) {
-            terms.add("ваканс");
-        }
-
-        if (normalizedText.contains("стаж")) {
-            terms.add("стаж");
-        }
-
-        if (normalizedText.contains("практик")) {
-            terms.add("практик");
-        }
-
-        if (normalizedText.contains("java") || normalizedText.contains("джава")) {
-            terms.add("java");
-            terms.add("джава");
-        }
-
-        if (normalizedText.contains("python") || normalizedText.contains("питон")) {
-            terms.add("python");
-            terms.add("питон");
-        }
-
-        if (normalizedText.contains("backend") || normalizedText.contains("бэкенд")) {
-            terms.add("backend");
-            terms.add("бэкенд");
-        }
-
-        if (normalizedText.contains("frontend") || normalizedText.contains("фронтенд")) {
-            terms.add("frontend");
-            terms.add("фронтенд");
-        }
-
-        String[] words = normalizedText
-                .replaceAll("[^a-zа-яё0-9+# ]", " ")
-                .split("\\s+");
-
-        for (String word : words) {
-            if (word.length() >= 4 && !isStopWord(word)) {
-                terms.add(word);
-            }
-        }
-
-        return terms;
-    }
-
-    private boolean isStopWord(String word) {
-        return Set.of(
-                "есть",
-                "новые",
-                "нового",
-                "свежие",
-                "какие",
-                "какая",
-                "какой",
-                "можно",
-                "меня",
-                "тебя",
-                "позицию",
-                "направлению",
-                "разработчика",
-                "сейчас",
-                "сегодня"
-        ).contains(word);
-    }
-
-    private int calculateScore(TelegramChannelPost post, Set<String> searchTerms) {
-        String text = post.getText() == null
-                ? ""
-                : post.getText().toLowerCase();
-
-        int score = 0;
-
-        for (String term : searchTerms) {
-            if (text.contains(term)) {
-                score += 3;
-            }
-        }
-
-        if (text.contains("ваканс")) {
-            score += 2;
-        }
-
-        if (text.contains("стаж")) {
-            score += 2;
-        }
-
-        if (text.contains("intern") || text.contains("junior")) {
-            score += 2;
-        }
-
-        return score;
-    }
-
-    private String buildRagPrompt(String userMessage, List<TelegramChannelPost> posts) {
+    private String buildRagPrompt(String userMessage, ChannelQueryAnalysis analysis, List<TelegramChannelPost> posts) {
         StringBuilder prompt = new StringBuilder();
 
         prompt.append("""
-                Пользователь задал вопрос по актуальным объявлениям Telegram-канала ЦКиТа.
+            Пользователь задал вопрос по актуальным объявлениям Telegram-канала ЦКиТа.
+    
+            Ниже передан блок "НАЙДЕННЫЕ_ПОСТЫ_ТЕЛЕГРАМ_КАНАЛА".
+            Это и есть актуальная база постов Telegram-канала, доступная тебе в этом запросе.
+    
+            Строгие правила:
+            - используй только найденные посты как источник фактов;
+            - не выдумывай вакансии, компании, дедлайны, даты, форматы и требования;
+            - не упоминай Platonus, деканат, кафедру, кураторов или другие системы, если их нет в найденных постах;
+            - не говори, что у тебя нет подключённой базы, если блок найденных постов передан;
+            - если в найденных постах нет ответа на конкретный вопрос, честно скажи: "В найденных постах этой информации нет";
+            - если вопрос про вакансии, не делай главным ответом производственную практику;
+            - если вопрос про практику, не перечисляй вакансии без необходимости;
+            - если вопрос про дедлайны, разделяй сроки по категориям;
+            - не добавляй блок "Следующий шаг" в каждом ответе;
+            - если совет действительно уместен, добавь его коротко в конце;
+            - если в найденных постах есть странная дата, например "32 июня" или "33 июня", укажи, что дату стоит перепроверить.
+            """);
 
-                ВАЖНО:
-                Ниже передан блок "НАЙДЕННЫЕ_ПОСТЫ_ТЕЛЕГРАМ_КАНАЛА".
-                Используй только эти посты как источник фактов.
-                Не выдумывай дополнительные вакансии, компании, дедлайны, форматы и требования.
-                Если в найденных постах есть странная дата, например "32 июня", аккуратно укажи,
-                что дату стоит перепроверить.
-                Если среди постов есть нерелевантные объявления, не делай их главными.
+        prompt.append("\nРезультат анализа запроса:\n");
+        prompt.append("intent: ").append(analysis.intent()).append("\n");
+        prompt.append("topic: ").append(analysis.topic()).append("\n");
+        prompt.append("needsChannelPosts: ").append(analysis.needsChannelPosts()).append("\n");
+        prompt.append("needsFaq: ").append(analysis.needsFaq()).append("\n");
+        prompt.append("needsDeadlines: ").append(analysis.needsDeadlines()).append("\n");
 
-                Ответь красиво и полезно:
-                • кратко перечисли подходящие объявления;
-                • выдели название позиции, дедлайн, формат и компанию, если они есть;
-                • если пользователь спрашивает про конкретную технологию, например Java, сначала покажи связанные с ней посты;
-                • в конце дай практичный следующий шаг.
-
-                Вопрос пользователя:
-                """);
-
+        prompt.append("\nВопрос пользователя:\n");
         prompt.append(userMessage).append("\n\n");
 
         prompt.append("НАЙДЕННЫЕ_ПОСТЫ_ТЕЛЕГРАМ_КАНАЛА:\n\n");
@@ -302,7 +171,7 @@ public class TelegramChannelPostAnswerService {
         OffsetDateTime dateTime = getEffectiveDate(post);
 
         if (dateTime == null) {
-            return null;
+            return "не указана";
         }
 
         return dateTime
@@ -315,7 +184,11 @@ public class TelegramChannelPostAnswerService {
             return post.getEditedAt();
         }
 
-        return post.getPostedAt();
+        if (post.getPostedAt() != null) {
+            return post.getPostedAt();
+        }
+
+        return post.getCreatedAt();
     }
 
     private String escapeTelegramHtml(String text) {
@@ -329,9 +202,18 @@ public class TelegramChannelPostAnswerService {
                 .replace(">", "&gt;");
     }
 
-    private record ScoredPost(
-            TelegramChannelPost post,
-            int score
-    ) {
+    private boolean shouldUseChannelPosts(ChannelQueryAnalysis analysis) {
+        if (analysis == null) {
+            return false;
+        }
+
+        if (analysis.needsChannelPosts() || analysis.needsDeadlines()) {
+            return true;
+        }
+
+        return switch (analysis.intent()) {
+            case VACANCY, PRACTICE, DEADLINE, GENERAL_UPDATES -> true;
+            case GENERAL_CHAT, FAQ, UNKNOWN -> false;
+        };
     }
 }

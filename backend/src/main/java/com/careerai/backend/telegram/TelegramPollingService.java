@@ -189,16 +189,16 @@ public class TelegramPollingService {
             return;
         }
 
-        var channelPostAnswer = telegramChannelPostAnswerService.buildAnswerIfRelevant(normalizedText);
-
-        if (channelPostAnswer.isPresent()) {
-            sendAndSaveHtmlMessage(telegramUser, chatId, channelPostAnswer.get());
-            return;
-        }
-
         TypingActionHandle typingActionHandle = telegramTypingService.startTyping(chatId);
 
         try {
+            var channelPostAnswer = telegramChannelPostAnswerService.buildAnswerIfRelevant(normalizedText);
+
+            if (channelPostAnswer.isPresent()) {
+                sendAndSaveHtmlMessage(telegramUser, chatId, channelPostAnswer.get());
+                return;
+            }
+
             LlmResponse response = llmProvider.generateAnswer(normalizedText);
             sendAndSaveHtmlMessage(telegramUser, chatId, response.text());
         }

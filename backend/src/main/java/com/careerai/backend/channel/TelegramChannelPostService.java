@@ -3,6 +3,7 @@ package com.careerai.backend.channel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
 
 import java.time.Instant;
@@ -22,11 +23,14 @@ public class TelegramChannelPostService {
     private static final Logger log = LoggerFactory.getLogger(TelegramChannelPostService.class);
 
     private final TelegramChannelPostRepository repository;
+    private final TelegramChannelPostMetadataService metadataService;
 
-    public TelegramChannelPostService(TelegramChannelPostRepository repository) {
+    public TelegramChannelPostService(TelegramChannelPostRepository repository, TelegramChannelPostMetadataService metadataService) {
         this.repository = repository;
+        this.metadataService = metadataService;
     }
 
+    @Transactional
     public void saveOrUpdateChannelPost(JsonNode message, String rawUpdateJson, boolean edited) {
         if (!message.has("chat") || !message.has("message_id")) {
             return;
@@ -55,7 +59,9 @@ public class TelegramChannelPostService {
             post.setEditedAt(extractTelegramDate(message, "edit_date"));
         }
 
-        repository.save(post);
+        TelegramChannelPost savedPost = repository.save(post);
+
+        metadataService.createOrResetMetadata(savedPost, edited);
 
         log.info(
                 "Telegram channel post saved. chatId={}, messageId={}, edited={}, textLength={}",

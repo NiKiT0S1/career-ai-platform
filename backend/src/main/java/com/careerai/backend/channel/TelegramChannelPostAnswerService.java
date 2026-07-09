@@ -39,15 +39,18 @@ public class TelegramChannelPostAnswerService {
     private final TelegramChannelPostRepository repository;
     private final ChannelQueryAnalyzer queryAnalyzer;
     private final LlmProvider llmProvider;
+    private final TelegramChannelPostStructuredSearchService structuredSearchService;
 
     public TelegramChannelPostAnswerService(
             TelegramChannelPostRepository repository,
             ChannelQueryAnalyzer queryAnalyzer,
-            LlmProvider llmProvider
+            LlmProvider llmProvider,
+            TelegramChannelPostStructuredSearchService structuredSearchService
     ) {
         this.repository = repository;
         this.queryAnalyzer = queryAnalyzer;
         this.llmProvider = llmProvider;
+        this.structuredSearchService = structuredSearchService;
     }
 
     public Optional<String> buildAnswerIfRelevant(String userMessage) {
@@ -57,15 +60,22 @@ public class TelegramChannelPostAnswerService {
             return Optional.empty();
         }
 
-        List<TelegramChannelPost> posts = repository.findLatestTextPosts(
-                PageRequest.of(0, MAX_CONTEXT_POSTS)
+        List<TelegramChannelPost> posts = structuredSearchService.findRelevantPosts(
+                analysis,
+                MAX_CONTEXT_POSTS
         );
 
+//        if (posts.isEmpty()) {
+//            return Optional.of("""
+//                    <b>Свежие объявления из Telegram-канала ЦКиТа</b>
+//                    Пока в сохранённой базе нет текстовых постов из Telegram-канала.
+//                    """);
+//        }
+
         if (posts.isEmpty()) {
-            return Optional.of("""
-                    <b>Свежие объявления из Telegram-канала ЦКиТа</b>
-                    Пока в сохранённой базе нет текстовых постов из Telegram-канала.
-                    """);
+            posts = repository.findLatestTextPosts(
+                    PageRequest.of(0, MAX_CONTEXT_POSTS)
+            );
         }
 
         String ragPrompt = buildRagPrompt(userMessage, analysis, posts);

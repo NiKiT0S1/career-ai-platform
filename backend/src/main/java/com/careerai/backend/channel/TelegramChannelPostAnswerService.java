@@ -5,6 +5,7 @@ import com.careerai.backend.ai.LlmResponse;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -32,6 +33,9 @@ public class TelegramChannelPostAnswerService {
     private static final DateTimeFormatter DATE_TIME_FORMATTER =
             DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm");
 
+    private static final DateTimeFormatter CURRENT_DATE_FORMATTER =
+            DateTimeFormatter.ofPattern("dd.MM.yyyy");
+
     private final TelegramChannelPostRepository repository;
     private final ChannelQueryAnalyzer queryAnalyzer;
     private final LlmProvider llmProvider;
@@ -49,9 +53,6 @@ public class TelegramChannelPostAnswerService {
     public Optional<String> buildAnswerIfRelevant(String userMessage) {
         ChannelQueryAnalysis analysis = queryAnalyzer.analyze(userMessage);
 
-//        if (!analysis.requiresChannelPosts()) {
-//            return Optional.empty();
-//        }
         if (!shouldUseChannelPosts(analysis)) {
             return Optional.empty();
         }
@@ -81,11 +82,18 @@ public class TelegramChannelPostAnswerService {
     private String buildRagPrompt(String userMessage, ChannelQueryAnalysis analysis, List<TelegramChannelPost> posts) {
         StringBuilder prompt = new StringBuilder();
 
+        String currentDateText = LocalDate
+                .now(ASTANA_ZONE_ID)
+                .format(CURRENT_DATE_FORMATTER);
+
         prompt.append("""
             Пользователь задал вопрос по актуальным объявлениям Telegram-канала ЦКиТа.
     
             Ниже передан блок "НАЙДЕННЫЕ_ПОСТЫ_ТЕЛЕГРАМ_КАНАЛА".
             Это и есть актуальная база постов Telegram-канала, доступная тебе в этом запросе.
+            
+            Текущая дата: %s.
+            Часовой пояс: Asia/Almaty.
     
             Строгие правила:
             - используй только найденные посты как источник фактов;
@@ -98,8 +106,37 @@ public class TelegramChannelPostAnswerService {
             - если вопрос про дедлайны, разделяй сроки по категориям;
             - не добавляй блок "Следующий шаг" в каждом ответе;
             - если совет действительно уместен, добавь его коротко в конце;
-            - если в найденных постах есть странная дата, например "32 июня" или "33 июня", укажи, что дату стоит перепроверить.
-            """);
+            
+            Правила актуальности:
+            - более новые посты считаются актуальнее старых;
+            - если новый пост продлевает срок, текущим сроком является новый срок;
+            - старый срок можно упомянуть только как предыдущий срок, например: "раньше было до 25 августа";
+            - если новый пост отменяет условие старого поста, обязательно учитывай отмену;
+            - не представляй отменённые или заменённые условия как актуальные.
+                
+            Правила по дедлайнам:
+            - дедлайны и важные даты выделяй HTML-тегами <b><i>...</i></b>;
+            - если пользователь спрашивает про "актуальные дедлайны", "сейчас", "текущие сроки", сначала перечисляй только актуальные и будущие сроки;
+            - истёкшие дедлайны выноси отдельно в блок "Истёкшие или неактуальные сроки";
+            - если дедлайн уже раньше текущей даты, обязательно напиши, что срок уже истёк;
+            - если дедлайн указан без года, например "30 июня", сравнивай его с текущим годом, если из текста поста не следует другой год;
+            - если дата невозможная или странная, например "32 июня" или "33 июня", не считай её актуальной датой и обязательно напиши, что дату нужно перепроверить;
+            - если дедлайн указан неточно, например "не скоро", "в любое время", "как душа пожелает", не превращай его в точную дату;
+            - если дедлайн не указан, так и напиши: "дедлайн не указан".
+            
+            Правила по актуальным вакансиям:
+            - если пользователь просит "актуальные вакансии", "доступные вакансии", "текущие вакансии", не включай в основной список вакансии с истёкшим дедлайном;
+            - если пользователь просит "только актуальные вакансии", вообще не перечисляй вакансии с истёкшим дедлайном в основном списке;
+            - вакансии с истёкшим дедлайном можно упомянуть только в отдельном коротком примечании в конце;
+            - если у вакансии дедлайн не указан, указан неточно или написано "в любое время", "не скоро", "как душа пожелает", такую вакансию можно показывать, но честно укажи, что точный дедлайн не установлен;
+            - если дата дедлайна невозможная, например "33 июня", не считай вакансию актуальной без предупреждения.
+                
+            Правила по производственной практике:
+            - если в постах есть старый срок сдачи документов и более новый продлённый срок, главным указывай продлённый срок;
+            - для документов по практике формулируй так: "актуальный срок — <b><i>до 7 сентября</i></b>, ранее указывалось до 25 августа";
+            - не начинай ответ со старой даты, если есть более новое объявление о продлении;
+            - период прохождения практики и срок сдачи документов — это разные вещи, не смешивай их.
+            """.formatted(currentDateText));
 
         prompt.append("\nРезультат анализа запроса:\n");
         prompt.append("intent: ").append(analysis.intent()).append("\n");

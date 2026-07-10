@@ -4,6 +4,7 @@ import com.careerai.backend.ai.LlmProvider;
 import com.careerai.backend.ai.LlmResponse;
 import com.careerai.backend.channel.TelegramChannelPostAnswerService;
 import com.careerai.backend.channel.TelegramChannelPostService;
+import com.careerai.backend.faq.FaqEntryService;
 import com.careerai.backend.message.ChatMessageService;
 import com.careerai.backend.runtime.BotRuntimeStateService;
 import com.careerai.backend.user.TelegramUser;
@@ -21,7 +22,7 @@ import tools.jackson.databind.ObjectMapper;
  * Главный сервис для получения сообщений из Telegram через polling.
  *
  * Он забирает новые updates из Telegram, восстанавливает и сохраняет offset,
- * обрабатывает команды /start, /help и /about, сохраняет историю переписки в БД,
+ * обрабатывает команды /start, /help, /about и /faq, сохраняет историю переписки в БД,
  * показывает статус "печатает..." и отправляет обычные вопросы пользователя в AI-провайдер.
  */
 
@@ -42,6 +43,7 @@ public class TelegramPollingService {
     private final TelegramHtmlSanitizer telegramHtmlSanitizer;
     private final TelegramChannelPostService telegramChannelPostService;
     private final TelegramChannelPostAnswerService telegramChannelPostAnswerService;
+    private final FaqEntryService faqEntryService;
 
     private long offset = 0;
     private boolean offsetInitialized = false;
@@ -55,7 +57,8 @@ public class TelegramPollingService {
                                   BotRuntimeStateService botRuntimeStateService,
                                   TelegramHtmlSanitizer telegramHtmlSanitizer,
                                   TelegramChannelPostService telegramChannelPostService,
-                                  TelegramChannelPostAnswerService telegramChannelPostAnswerService) {
+                                  TelegramChannelPostAnswerService telegramChannelPostAnswerService,
+                                  FaqEntryService faqEntryService) {
         this.telegramBotService = telegramBotService;
         this.objectMapper = objectMapper;
         this.llmProvider = llmProvider;
@@ -66,6 +69,7 @@ public class TelegramPollingService {
         this.telegramHtmlSanitizer = telegramHtmlSanitizer;
         this.telegramChannelPostService = telegramChannelPostService;
         this.telegramChannelPostAnswerService = telegramChannelPostAnswerService;
+        this.faqEntryService = faqEntryService;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -189,6 +193,11 @@ public class TelegramPollingService {
             return;
         }
 
+        if (isFaqCommand(normalizedText)) {
+            sendAndSaveHtmlMessage(telegramUser, chatId, faqEntryService.buildFaqListMessage());
+            return;
+        }
+
         TypingActionHandle typingActionHandle = telegramTypingService.startTyping(chatId);
 
         try {
@@ -234,6 +243,10 @@ public class TelegramPollingService {
 
     private boolean isAboutCommand(String text) {
         return text.startsWith("/about");
+    }
+
+    private boolean isFaqCommand(String text) {
+        return text.startsWith("/faq");
     }
 
     private long elapsedMillis(long startedAtNanos) {

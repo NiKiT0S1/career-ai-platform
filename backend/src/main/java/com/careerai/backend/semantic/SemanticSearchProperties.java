@@ -23,4 +23,7 @@ public class SemanticSearchProperties {
 
     @Value("${semantic-search.output-dimensions}")
     private int outputDimensions;
+
+    @Value("${semantic-search.index-faq-on-startup:false}")
+    private boolean indexFaqOnStartup;
 }

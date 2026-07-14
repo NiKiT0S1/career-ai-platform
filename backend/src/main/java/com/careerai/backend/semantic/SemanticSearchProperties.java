@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
  * Хранит настройки семантического поиска.
  *
  * Feature flag позволяет полностью отключить Semantic RAG
- * и использовать стабильную логику Phase 5.
+ * и использовать прошлую стабильную логику.
  */
 
 @Getter
@@ -26,4 +26,10 @@ public class SemanticSearchProperties {
 
     @Value("${semantic-search.index-faq-on-startup:false}")
     private boolean indexFaqOnStartup;
+
+    @Value("${semantic-search.faq-max-results:4}")
+    private int faqMaxResults;
+
+    @Value("${semantic-search.faq-min-similarity:0.45}")
+    private double faqMinSimilarity;
 }

@@ -4,6 +4,7 @@ import com.careerai.backend.ai.LlmProvider;
 import com.careerai.backend.ai.LlmResponse;
 import com.careerai.backend.faq.FaqEntry;
 import com.careerai.backend.faq.FaqEntryService;
+import com.careerai.backend.semantic.FaqSemanticSearchService;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
@@ -44,19 +45,22 @@ public class TelegramChannelPostAnswerService {
     private final LlmProvider llmProvider;
     private final TelegramChannelPostStructuredSearchService structuredSearchService;
     private final FaqEntryService faqEntryService;
+    private final FaqSemanticSearchService faqSemanticSearchService;
 
     public TelegramChannelPostAnswerService(
             TelegramChannelPostRepository repository,
             ChannelQueryAnalyzer queryAnalyzer,
             LlmProvider llmProvider,
             TelegramChannelPostStructuredSearchService structuredSearchService,
-            FaqEntryService faqEntryService
+            FaqEntryService faqEntryService,
+            FaqSemanticSearchService faqSemanticSearchService
     ) {
         this.repository = repository;
         this.queryAnalyzer = queryAnalyzer;
         this.llmProvider = llmProvider;
         this.structuredSearchService = structuredSearchService;
         this.faqEntryService = faqEntryService;
+        this.faqSemanticSearchService = faqSemanticSearchService;
     }
 
     public Optional<String> buildAnswerIfRelevant(String userMessage) {
@@ -70,7 +74,7 @@ public class TelegramChannelPostAnswerService {
         }
 
         List<FaqEntry> faqEntries = shouldUseFaq
-                ? faqEntryService.findActiveEntries()
+                ? findRelevantFaqEntries(userMessage)
                 : List.of();
 
         List<TelegramChannelPost> posts = shouldUseChannelPosts
@@ -109,6 +113,24 @@ public class TelegramChannelPostAnswerService {
         }
 
         return List.of();
+    }
+
+    /**
+     * Сначала пытается найти релевантные FAQ через Semantic Search.
+     *
+     * Если Semantic Search выключен, сломан, не проиндексирован
+     * или не нашёл уверенных совпадений, возвращает все FAQ
+     * по стабильной логике до Semantic.
+     */
+    private List<FaqEntry> findRelevantFaqEntries(String userMessage) {
+        Optional<List<FaqEntry>> semanticResult = faqSemanticSearchService.findRelevantEntries(userMessage);
+
+        if (semanticResult.isPresent()
+                && !semanticResult.get().isEmpty()) {
+            return semanticResult.get();
+        }
+
+        return faqEntryService.findActiveEntries();
     }
 
     private String buildCombinedRagPrompt(String userMessage, ChannelQueryAnalysis analysis, List<FaqEntry> faqEntries, List<TelegramChannelPost> posts) {

@@ -7,6 +7,7 @@ import org.springframework.stereotype.Repository;
 import java.sql.Array;
 import java.sql.PreparedStatement;
 import java.util.Arrays;
+import java.util.List;
 
 /**
  * Выполняет операции с сохранёнными embedding-векторами.
@@ -115,6 +116,62 @@ public class SemanticEmbeddingRepository {
 
             return null;
         });
+    }
+
+    /**
+     * Загружает embeddings одного типа, созданные нужной моделью
+     * и имеющие ожидаемую размерность.
+     */
+    public List<SemanticEmbeddingVector> findBySourceType(
+            SemanticSourceType sourceType,
+            String embeddingModel,
+            int embeddingDimensions
+    ) {
+        return jdbcTemplate.query(
+                """
+                SELECT
+                    source_id,
+                    embedding
+                FROM semantic_embeddings
+                WHERE source_type = ?
+                  AND embedding_model = ?
+                  AND embedding_dimensions = ?
+                """,
+                (resultSet, rowNumber) -> {
+                    Array sqlArray = resultSet.getArray("embedding");
+
+                    try {
+                        Object rawArray = sqlArray.getArray();
+
+                        if (!(rawArray instanceof Object[] rawValues)) {
+                            throw new IllegalStateException("PostgreSQL embedding is not an object array");
+                        }
+
+                        double[] values = new double[rawValues.length];
+
+                        for (int i = 0; i < rawValues.length; i++) {
+                            Object rawValue = rawValues[i];
+
+                            if (!(rawValue instanceof Number number)) {
+                                throw new IllegalStateException("PostgreSQL embedding contains a non-numeric value");
+                            }
+
+                            values[i] = number.doubleValue();
+                        }
+
+                        return new SemanticEmbeddingVector(
+                                resultSet.getLong("source_id"),
+                                values
+                        );
+                    }
+                    finally {
+                        sqlArray.free();
+                    }
+                },
+                sourceType.name(),
+                embeddingModel,
+                embeddingDimensions
+        );
     }
 
     public long countBySourceType(SemanticSourceType sourceType) {

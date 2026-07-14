@@ -2,6 +2,7 @@ package com.careerai.backend.channel;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
@@ -24,10 +25,16 @@ public class TelegramChannelPostService {
 
     private final TelegramChannelPostRepository repository;
     private final TelegramChannelPostMetadataService metadataService;
+    private final ApplicationEventPublisher eventPublisher;
 
-    public TelegramChannelPostService(TelegramChannelPostRepository repository, TelegramChannelPostMetadataService metadataService) {
+    public TelegramChannelPostService(
+            TelegramChannelPostRepository repository,
+            TelegramChannelPostMetadataService metadataService,
+            ApplicationEventPublisher eventPublisher
+    ) {
         this.repository = repository;
         this.metadataService = metadataService;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional
@@ -62,6 +69,10 @@ public class TelegramChannelPostService {
         TelegramChannelPost savedPost = repository.save(post);
 
         metadataService.createOrResetMetadata(savedPost, edited);
+
+        eventPublisher.publishEvent(
+                new TelegramChannelPostSavedEvent(savedPost.getId())
+        );
 
         log.info(
                 "Telegram channel post saved. chatId={}, messageId={}, edited={}, textLength={}",

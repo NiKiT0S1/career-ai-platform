@@ -32,4 +32,10 @@ public class SemanticSearchProperties {
 
     @Value("${semantic-search.faq-min-similarity:0.45}")
     private double faqMinSimilarity;
+
+    @Value("${semantic-search.index-channel-posts-on-startup:false}")
+    private boolean indexChannelPostsOnStartup;
+
+    @Value("${semantic-search.channel-index-limit:100}")
+    private int channelIndexLimit;
 }

@@ -119,6 +119,27 @@ public class SemanticEmbeddingRepository {
     }
 
     /**
+     * Удаляет embedding исходной записи.
+     *
+     * Используется, если Telegram-пост стал пустым
+     * после редактирования.
+     */
+    public int delete(
+            SemanticSourceType sourceType,
+            long sourceId
+    ) {
+        return jdbcTemplate.update(
+            """
+            DELETE FROM semantic_embeddings
+            WHERE source_type = ?
+              AND source_id = ?
+            """,
+                sourceType.name(),
+                sourceId
+        );
+    }
+
+    /**
      * Загружает embeddings одного типа, созданные нужной моделью
      * и имеющие ожидаемую размерность.
      */

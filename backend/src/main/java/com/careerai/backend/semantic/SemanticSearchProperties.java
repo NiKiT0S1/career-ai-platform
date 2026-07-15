@@ -38,4 +38,10 @@ public class SemanticSearchProperties {
 
     @Value("${semantic-search.channel-index-limit:100}")
     private int channelIndexLimit;
+
+    @Value("${semantic-search.channel-max-results:6}")
+    private int channelMaxResults;
+
+    @Value("${semantic-search.channel-min-similarity:0.45}")
+    private double channelMinSimilarity;
 }

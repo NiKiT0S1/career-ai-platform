@@ -30,7 +30,7 @@ import java.util.Set;
 @Service
 public class TelegramChannelPostAnswerService {
 
-    private static final int MAX_CONTEXT_POSTS = 15;
+    private static final int MAX_CONTEXT_POSTS = 8;
 
     private static final ZoneId ASTANA_ZONE_ID = ZoneId.of("Asia/Almaty");
 
@@ -43,7 +43,8 @@ public class TelegramChannelPostAnswerService {
     private final TelegramChannelPostRepository repository;
     private final ChannelQueryAnalyzer queryAnalyzer;
     private final LlmProvider llmProvider;
-    private final TelegramChannelPostStructuredSearchService structuredSearchService;
+//    private final TelegramChannelPostStructuredSearchService structuredSearchService;
+    private final TelegramChannelPostHybridSearchService hybridSearchService;
     private final FaqEntryService faqEntryService;
     private final FaqSemanticSearchService faqSemanticSearchService;
 
@@ -51,14 +52,16 @@ public class TelegramChannelPostAnswerService {
             TelegramChannelPostRepository repository,
             ChannelQueryAnalyzer queryAnalyzer,
             LlmProvider llmProvider,
-            TelegramChannelPostStructuredSearchService structuredSearchService,
+//            TelegramChannelPostStructuredSearchService structuredSearchService,
+            TelegramChannelPostHybridSearchService hybridSearchService,
             FaqEntryService faqEntryService,
             FaqSemanticSearchService faqSemanticSearchService
     ) {
         this.repository = repository;
         this.queryAnalyzer = queryAnalyzer;
         this.llmProvider = llmProvider;
-        this.structuredSearchService = structuredSearchService;
+//        this.structuredSearchService = structuredSearchService;
+        this.hybridSearchService = hybridSearchService;
         this.faqEntryService = faqEntryService;
         this.faqSemanticSearchService = faqSemanticSearchService;
     }
@@ -78,7 +81,7 @@ public class TelegramChannelPostAnswerService {
                 : List.of();
 
         List<TelegramChannelPost> posts = shouldUseChannelPosts
-                ? findRelevantPost(analysis)
+                ? findRelevantPosts(userMessage, analysis)
                 : List.of();
 
         if (faqEntries.isEmpty() && posts.isEmpty()) {
@@ -96,8 +99,9 @@ public class TelegramChannelPostAnswerService {
         return Optional.of(buildDirectFallbackAnswer(faqEntries, posts));
     }
 
-    private List<TelegramChannelPost> findRelevantPost(ChannelQueryAnalysis analysis) {
-        List<TelegramChannelPost> posts = structuredSearchService.findRelevantPosts(
+    private List<TelegramChannelPost> findRelevantPosts(String userMessage, ChannelQueryAnalysis analysis) {
+        List<TelegramChannelPost> posts = hybridSearchService.findRelevantPosts(
+                userMessage,
                 analysis,
                 MAX_CONTEXT_POSTS
         );
@@ -173,12 +177,19 @@ public class TelegramChannelPostAnswerService {
             - можно использовать только Telegram HTML-теги <b>, <i>;
             - не используй Markdown.
             
-            Правила актуальности:
+            Правила актуальности и противоречий:
+            - Telegram-посты переданы от новых к старым;
             - более новые посты считаются актуальнее старых;
+            - если несколько постов относятся к одному мероприятию, вакансии или сроку, более новый пост имеет приоритет;
+            - если новый пост отменяет или исправляет отдельное условие старого поста, используй новое условие;
+            - фразы по типу "не будет", "отменено", "отказались", "раздавать не будем", "больше не действует" отменяют соответствующее более старое обещание;
             - если новый пост продлевает срок, текущим сроком является новый срок;
             - старый срок можно упомянуть только как предыдущий срок, например: "раньше было до 25 августа";
-            - если новый пост отменяет условие старого поста, обязательно учитывай отмену. Например, если в каком-то мероприятии указывался бонус за присутствие, а в следующем посте пишут, что бонуса не будет, то так и пиши. Типа в одном посте писалось, что за присутствие будут раздавать напитки, например Hennessy, а в следующем посту пишут, что по нему отмена, то ты пишешь пользователю что раздача Hennessy на мероприятии отменена;
-            - не представляй отменённые или заменённые условия как актуальные.
+            - не представляй отменённые или заменённые условия как актуальные;
+            - если отменено только одно условие, не отменяй автоматически остальные условия;
+            - например, если сначала обещали подарок или напиток, а затем сообщили, что его не будет, ответ должен прямо сказать, что раздача отменена;
+            - остальные подтверждённые условия мероприятия сохраняются, если они отдельно не отменялись;
+            - перед формированием ответа мысленно сопоставь посты об одном событии и разреши все найденные противоречия.
                 
             Правила по дедлайнам:
             - дедлайны и важные даты выделяй HTML-тегами <b><i>...</i></b>;
@@ -250,8 +261,19 @@ public class TelegramChannelPostAnswerService {
             return;
         }
 
-        for (int i = 0; i < posts.size(); i++) {
-            TelegramChannelPost post = posts.get(i);
+        List<TelegramChannelPost> orderedPosts = posts.stream()
+                .sorted(
+                        Comparator.comparing(
+                                this::getEffectiveDate,
+                                Comparator.nullsLast(
+                                        Comparator.reverseOrder()
+                                )
+                        )
+                )
+                .toList();
+
+        for (int i = 0; i < orderedPosts.size(); i++) {
+            TelegramChannelPost post = orderedPosts.get(i);
 
             prompt.append("ПОСТ ").append(i + 1).append(":\n");
             prompt.append("Дата: ").append(formatPostDate(post)).append("\n");

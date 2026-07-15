@@ -21,18 +21,18 @@ public class ChannelPostSemanticSearchService {
     private static final Logger log = LoggerFactory.getLogger(ChannelPostSemanticSearchService.class);
 
     private final SemanticSearchProperties properties;
-    private final EmbeddingProvider embeddingProvider;
+//    private final EmbeddingProvider embeddingProvider;
     private final SemanticEmbeddingRepository embeddingRepository;
     private final TelegramChannelPostRepository postRepository;
 
     public ChannelPostSemanticSearchService(
         SemanticSearchProperties properties,
-        EmbeddingProvider embeddingProvider,
+//        EmbeddingProvider embeddingProvider,
         SemanticEmbeddingRepository embeddingRepository,
         TelegramChannelPostRepository postRepository
     ) {
         this.properties = properties;
-        this.embeddingProvider = embeddingProvider;
+//        this.embeddingProvider = embeddingProvider;
         this.embeddingRepository = embeddingRepository;
         this.postRepository = postRepository;
     }
@@ -44,25 +44,25 @@ public class ChannelPostSemanticSearchService {
      * Optional со списком означает, что поиск был выполнен,
      * даже если уверенных совпадений не найдено.
      */
-    public Optional<List<ChannelPostSemanticMatch>> findRelevantPosts(String userMessage) {
+    public Optional<List<ChannelPostSemanticMatch>> findRelevantPosts(EmbeddingResult queryEmbedding) {
         if (!properties.isEnabled()) {
             return Optional.empty();
         }
 
-        if (userMessage == null || userMessage.isBlank()) {
-            return Optional.empty();
-        }
+        if (queryEmbedding == null
+                || queryEmbedding.failed()
+                || queryEmbedding.values() == null
+                || queryEmbedding.values().length
+                != properties.getOutputDimensions()) {
 
-        EmbeddingResult queryEmbedding = embeddingProvider.embedQuery(userMessage);
-
-        if (queryEmbedding.failed()) {
             log.warn(
-                    "Channel semantic search fallback: query embedding failed. error={}",
-                    queryEmbedding.errorMessage()
+                    "Channel semantic search fallback: valid query embedding is unavailable"
             );
 
             return Optional.empty();
         }
+
+        double[] queryVector = queryEmbedding.values();
 
         try {
             List<SemanticEmbeddingVector> storedEmbeddings =
@@ -108,7 +108,7 @@ public class ChannelPostSemanticSearchService {
                                 }
 
                                 double similarity = cosineSimilarity(
-                                        queryEmbedding.values(),
+                                        queryVector,
                                         storedEmbedding.values()
                                 );
 

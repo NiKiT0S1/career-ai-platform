@@ -2,6 +2,7 @@ package com.careerai.backend.channel;
 
 import com.careerai.backend.semantic.ChannelPostSemanticMatch;
 import com.careerai.backend.semantic.ChannelPostSemanticSearchService;
+import com.careerai.backend.semantic.EmbeddingResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -30,15 +31,15 @@ public class TelegramChannelPostHybridSearchService {
     }
 
     public List<TelegramChannelPost> findRelevantPosts(
-            String userMessage,
             ChannelQueryAnalysis analysis,
+            Optional<EmbeddingResult> queryEmbedding,
             int limit
     ) {
         int safeLimit = Math.max(1, limit);
 
         List<TelegramChannelPost> structuredPosts = structuredSearchService.findRelevantPosts(analysis, safeLimit);
 
-        Optional<List<ChannelPostSemanticMatch>> semanticResult = semanticSearchService.findRelevantPosts(userMessage);
+        Optional<List<ChannelPostSemanticMatch>> semanticResult = queryEmbedding.flatMap(semanticSearchService::findRelevantPosts);
 
         if (semanticResult.isEmpty()) {
             log.info(

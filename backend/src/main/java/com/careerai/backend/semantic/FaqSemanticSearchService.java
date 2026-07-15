@@ -21,7 +21,7 @@ public class FaqSemanticSearchService {
     private static final Logger log = LoggerFactory.getLogger(FaqSemanticSearchService.class);
 
     private final SemanticSearchProperties properties;
-    private final EmbeddingProvider embeddingProvider;
+//    private final EmbeddingProvider embeddingProvider;
     private final SemanticEmbeddingRepository embeddingRepository;
     private final FaqEntryService faqEntryService;
 
@@ -32,7 +32,7 @@ public class FaqSemanticSearchService {
             FaqEntryService faqEntryService
     ) {
         this.properties = properties;
-        this.embeddingProvider = embeddingProvider;
+//        this.embeddingProvider = embeddingProvider;
         this.embeddingRepository = embeddingRepository;
         this.faqEntryService = faqEntryService;
     }
@@ -43,25 +43,25 @@ public class FaqSemanticSearchService {
      *
      * Возвращает Optional со списком, если поиск был выполнен.
      */
-    public Optional<List<FaqEntry>> findRelevantEntries(String userMessage) {
+    public Optional<List<FaqEntry>> findRelevantEntries(EmbeddingResult queryEmbedding) {
         if (!properties.isEnabled()) {
             return Optional.empty();
         }
 
-        if (userMessage == null || userMessage.isBlank()) {
-            return Optional.empty();
-        }
+        if (queryEmbedding == null
+                || queryEmbedding.failed()
+                || queryEmbedding.values() == null
+                || queryEmbedding.values().length
+                != properties.getOutputDimensions()) {
 
-        EmbeddingResult queryEmbedding = embeddingProvider.embedQuery(userMessage);
-
-        if (queryEmbedding.failed()) {
             log.warn(
-                    "FAQ semantic search fallback: query embedding failed. error={}",
-                    queryEmbedding.errorMessage()
+                    "FAQ semantic search fallback: valid query embedding is unavailable"
             );
 
             return Optional.empty();
         }
+
+        double[] queryVector = queryEmbedding.values();
 
         List<SemanticEmbeddingVector> storedEmbeddings = embeddingRepository.findBySourceType(
                 SemanticSourceType.FAQ,
@@ -96,7 +96,7 @@ public class FaqSemanticSearchService {
                     }
 
                     double similarity = cosineSimilarity(
-                            queryEmbedding.values(),
+                            queryVector,
                             storedEmbedding.values()
                     );
 

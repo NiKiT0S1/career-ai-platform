@@ -4,7 +4,9 @@ import com.careerai.backend.ai.LlmProvider;
 import com.careerai.backend.ai.LlmResponse;
 import com.careerai.backend.faq.FaqEntry;
 import com.careerai.backend.faq.FaqEntryService;
+import com.careerai.backend.semantic.EmbeddingResult;
 import com.careerai.backend.semantic.FaqSemanticSearchService;
+import com.careerai.backend.semantic.SemanticQueryEmbeddingService;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
@@ -47,6 +49,7 @@ public class TelegramChannelPostAnswerService {
     private final TelegramChannelPostHybridSearchService hybridSearchService;
     private final FaqEntryService faqEntryService;
     private final FaqSemanticSearchService faqSemanticSearchService;
+    private final SemanticQueryEmbeddingService semanticQueryEmbeddingService;
 
     public TelegramChannelPostAnswerService(
             TelegramChannelPostRepository repository,
@@ -55,7 +58,8 @@ public class TelegramChannelPostAnswerService {
 //            TelegramChannelPostStructuredSearchService structuredSearchService,
             TelegramChannelPostHybridSearchService hybridSearchService,
             FaqEntryService faqEntryService,
-            FaqSemanticSearchService faqSemanticSearchService
+            FaqSemanticSearchService faqSemanticSearchService,
+            SemanticQueryEmbeddingService semanticQueryEmbeddingService
     ) {
         this.repository = repository;
         this.queryAnalyzer = queryAnalyzer;
@@ -64,6 +68,7 @@ public class TelegramChannelPostAnswerService {
         this.hybridSearchService = hybridSearchService;
         this.faqEntryService = faqEntryService;
         this.faqSemanticSearchService = faqSemanticSearchService;
+        this.semanticQueryEmbeddingService = semanticQueryEmbeddingService;
     }
 
     public Optional<String> buildAnswerIfRelevant(String userMessage) {
@@ -76,12 +81,14 @@ public class TelegramChannelPostAnswerService {
             return Optional.empty();
         }
 
+        Optional<EmbeddingResult> queryEmbedding = semanticQueryEmbeddingService.createQueryEmbedding(userMessage);
+
         List<FaqEntry> faqEntries = shouldUseFaq
-                ? findRelevantFaqEntries(userMessage)
+                ? findRelevantFaqEntries(queryEmbedding)
                 : List.of();
 
         List<TelegramChannelPost> posts = shouldUseChannelPosts
-                ? findRelevantPosts(userMessage, analysis)
+                ? findRelevantPosts(analysis, queryEmbedding)
                 : List.of();
 
         if (faqEntries.isEmpty() && posts.isEmpty()) {
@@ -99,10 +106,10 @@ public class TelegramChannelPostAnswerService {
         return Optional.of(buildDirectFallbackAnswer(faqEntries, posts));
     }
 
-    private List<TelegramChannelPost> findRelevantPosts(String userMessage, ChannelQueryAnalysis analysis) {
+    private List<TelegramChannelPost> findRelevantPosts(ChannelQueryAnalysis analysis, Optional<EmbeddingResult> queryEmbedding) {
         List<TelegramChannelPost> posts = hybridSearchService.findRelevantPosts(
-                userMessage,
                 analysis,
+                queryEmbedding,
                 MAX_CONTEXT_POSTS
         );
 
@@ -126,8 +133,8 @@ public class TelegramChannelPostAnswerService {
      * или не нашёл уверенных совпадений, возвращает все FAQ
      * по стабильной логике до Semantic.
      */
-    private List<FaqEntry> findRelevantFaqEntries(String userMessage) {
-        Optional<List<FaqEntry>> semanticResult = faqSemanticSearchService.findRelevantEntries(userMessage);
+    private List<FaqEntry> findRelevantFaqEntries(Optional<EmbeddingResult> queryEmbedding) {
+        Optional<List<FaqEntry>> semanticResult = queryEmbedding.flatMap(faqSemanticSearchService::findRelevantEntries);
 
         if (semanticResult.isPresent()
                 && !semanticResult.get().isEmpty()) {

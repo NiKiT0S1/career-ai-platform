@@ -7,156 +7,326 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import java.util.*;
+import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 /**
- * Объединяет structured metadata search
- * и семантический поиск Telegram-постов.
+ * Объединяет structured и semantic search
+ * отдельно для каждой категории запроса.
  */
 
 @Service
 public class TelegramChannelPostHybridSearchService {
 
-    private static final Logger log = LoggerFactory.getLogger(TelegramChannelPostHybridSearchService.class);
+    private static final Logger log =
+            LoggerFactory.getLogger(
+                    TelegramChannelPostHybridSearchService.class
+            );
 
-    private final TelegramChannelPostStructuredSearchService structuredSearchService;
-    private final ChannelPostSemanticSearchService semanticSearchService;
+    private final TelegramChannelPostStructuredSearchService
+            structuredSearchService;
+
+    private final ChannelPostSemanticSearchService
+            semanticSearchService;
 
     public TelegramChannelPostHybridSearchService(
             TelegramChannelPostStructuredSearchService structuredSearchService,
             ChannelPostSemanticSearchService semanticSearchService
     ) {
-        this.structuredSearchService = structuredSearchService;
-        this.semanticSearchService = semanticSearchService;
+        this.structuredSearchService =
+                structuredSearchService;
+
+        this.semanticSearchService =
+                semanticSearchService;
     }
 
-    public List<TelegramChannelPost> findRelevantPosts(
+    public ChannelPostSearchResult findRelevantPosts(
             ChannelQueryAnalysis analysis,
             Optional<EmbeddingResult> queryEmbedding,
-            int limit
+            int totalLimit
     ) {
-        int safeLimit = Math.max(1, limit);
-
-        List<TelegramChannelPost> structuredPosts = structuredSearchService.findRelevantPosts(analysis, safeLimit);
-
-        Optional<List<ChannelPostSemanticMatch>> semanticResult = queryEmbedding.flatMap(semanticSearchService::findRelevantPosts);
-
-        if (semanticResult.isEmpty()) {
-            log.info(
-                    "Hybrid channel search used structured fallback. structured={}",
-                    structuredPosts.size()
-            );
-
-            return structuredPosts.stream()
-                    .limit(safeLimit)
-                    .toList();
+        if (analysis == null
+                || !analysis.needsChannelPosts()) {
+            return ChannelPostSearchResult.empty();
         }
 
-        List<ChannelPostSemanticMatch> semanticMatches = semanticResult.get();
+        int safeTotalLimit =
+                Math.max(1, totalLimit);
 
-        if (semanticMatches.isEmpty()) {
-            log.info(
-                    "Hybrid channel search found no confident semantic matches. Using structured results. structured={}",
-                    structuredPosts.size()
-            );
+        List<ChannelContentScope> scopes =
+                analysis.contentScopes();
 
-            return structuredPosts.stream()
-                    .limit(safeLimit)
-                    .toList();
+        if (scopes == null || scopes.isEmpty()) {
+            return ChannelPostSearchResult.empty();
         }
 
-        List<TelegramChannelPost> result = new ArrayList<>();
-        Set<Long> addedPostIds = new LinkedHashSet<>();
+        List<ChannelPostSearchGroup> groups =
+                new ArrayList<>();
 
-        Set<Long> structuredPostIds = structuredPosts.stream()
-                .map(TelegramChannelPost::getId)
-                .filter(id -> id != null)
-                .collect(
-                        LinkedHashSet::new,
-                        Set::add,
-                        Set::addAll
+        int remainingLimit = safeTotalLimit;
+
+        for (ChannelContentScope scope : scopes) {
+            if (remainingLimit <= 0
+                    || scope == ChannelContentScope.NONE) {
+                break;
+            }
+
+            int scopeLimit = calculateScopeLimit(
+                    analysis,
+                    scopes.size(),
+                    remainingLimit,
+                    safeTotalLimit
+            );
+
+            List<TelegramChannelPost> structuredPosts =
+                    structuredSearchService
+                            .findRelevantPostsForScope(
+                                    analysis,
+                                    scope,
+                                    scopeLimit
+                            );
+
+            Optional<List<ChannelPostSemanticMatch>>
+                    semanticResult =
+                    queryEmbedding.flatMap(
+                            embedding ->
+                                    semanticSearchService
+                                            .findRelevantPosts(
+                                                    embedding,
+                                                    scope
+                                            )
+                    );
+
+            List<TelegramChannelPost> mergedPosts =
+                    mergeScopeResults(
+                            structuredPosts,
+                            semanticResult,
+                            analysis.resultMode(),
+                            scopeLimit
+                    );
+
+            if (!mergedPosts.isEmpty()) {
+                groups.add(
+                        new ChannelPostSearchGroup(
+                                scope,
+                                mergedPosts
+                        )
                 );
 
+                remainingLimit -= mergedPosts.size();
+            }
+
+            log.info(
+                    "Hybrid channel scope completed. "
+                            + "scope={}, mode={}, structured={}, "
+                            + "semantic={}, selected={}",
+                    scope,
+                    analysis.resultMode(),
+                    structuredPosts.size(),
+                    semanticResult
+                            .map(List::size)
+                            .orElse(0),
+                    mergedPosts.size()
+            );
+        }
+
+        ChannelPostSearchResult result =
+                new ChannelPostSearchResult(groups);
+
+        log.info(
+                "Hybrid channel search completed. "
+                        + "scopes={}, mode={}, groups={}, "
+                        + "selected={}",
+                analysis.contentScopes(),
+                analysis.resultMode(),
+                groups.size(),
+                result.allPosts().size()
+        );
+
+        return result;
+    }
+
+    private int calculateScopeLimit(
+            ChannelQueryAnalysis analysis,
+            int scopeCount,
+            int remainingLimit,
+            int totalLimit
+    ) {
+        if (analysis.resultMode()
+                == ChannelResultMode.ALL_MATCHING) {
+            return remainingLimit;
+        }
+
+        int balancedLimit =
+                Math.max(1, totalLimit / scopeCount);
+
+        return Math.min(
+                balancedLimit,
+                remainingLimit
+        );
+    }
+
+    private List<TelegramChannelPost> mergeScopeResults(
+            List<TelegramChannelPost> structuredPosts,
+            Optional<List<ChannelPostSemanticMatch>>
+                    semanticResult,
+            ChannelResultMode resultMode,
+            int limit
+    ) {
+        List<TelegramChannelPost> result =
+                new ArrayList<>();
+
+        Set<Long> addedIds =
+                new LinkedHashSet<>();
+
+        if (resultMode
+                == ChannelResultMode.ALL_MATCHING) {
+
+            /*
+             * Для полного списка сначала гарантированно
+             * сохраняем все structured-записи.
+             */
+            for (TelegramChannelPost post : structuredPosts) {
+                addPost(result, addedIds, post, limit);
+            }
+
+            /*
+             * Затем добавляем смысловые уточнения,
+             * например отмены или исправления типа OTHER.
+             */
+            semanticResult.ifPresent(matches -> {
+                for (ChannelPostSemanticMatch match : matches) {
+                    addPost(
+                            result,
+                            addedIds,
+                            match.post(),
+                            limit
+                    );
+                }
+            });
+
+            return sortNewestFirst(result);
+        }
+
+        if (semanticResult.isEmpty()
+                || semanticResult.get().isEmpty()) {
+
+            for (TelegramChannelPost post : structuredPosts) {
+                addPost(result, addedIds, post, limit);
+            }
+
+            return sortNewestFirst(result);
+        }
+
+        List<ChannelPostSemanticMatch> semanticMatches =
+                semanticResult.get();
+
+        Set<Long> structuredIds =
+                new LinkedHashSet<>();
+
+        for (TelegramChannelPost post : structuredPosts) {
+            if (post != null && post.getId() != null) {
+                structuredIds.add(post.getId());
+            }
+        }
+
         /*
-         * Сначала добавляем посты, найденные одновременно
-         * structured и semantic поиском.
-         *
-         * Это наиболее уверенные результаты.
+         * Сначала пересечение structured + semantic.
          */
         for (ChannelPostSemanticMatch match : semanticMatches) {
             TelegramChannelPost post = match.post();
 
-            if (post.getId() != null
-                    && structuredPostIds.contains(post.getId())) {
+            if (post != null
+                    && post.getId() != null
+                    && structuredIds.contains(post.getId())) {
 
                 addPost(
                         result,
-                        addedPostIds,
+                        addedIds,
                         post,
-                        safeLimit
+                        limit
                 );
             }
         }
 
         /*
-         * Затем добавляем семантически подходящие посты,
-         * которые metadata-поиск мог пропустить.
+         * Затем semantic-only уточнения.
          */
         for (ChannelPostSemanticMatch match : semanticMatches) {
             addPost(
                     result,
-                    addedPostIds,
+                    addedIds,
                     match.post(),
-                    safeLimit
+                    limit
             );
         }
 
         /*
-         * Оставшиеся места заполняем результатами
-         * structured metadata search.
+         * Оставшиеся structured-записи.
          */
         for (TelegramChannelPost post : structuredPosts) {
             addPost(
                     result,
-                    addedPostIds,
+                    addedIds,
                     post,
-                    safeLimit
+                    limit
             );
         }
 
-        long overlapCount = semanticMatches.stream()
-                .map(ChannelPostSemanticMatch::post)
-                .map(TelegramChannelPost::getId)
-                .filter(id -> id != null)
-                .filter(structuredPostIds::contains)
-                .count();
+        return sortNewestFirst(result);
+    }
 
-        log.info(
-                "Hybrid channel search completed. structured={}, semantic={}, overlap={}, selected={}",
-                structuredPosts.size(),
-                semanticMatches.size(),
-                overlapCount,
-                result.size()
-        );
+    private List<TelegramChannelPost> sortNewestFirst(
+            List<TelegramChannelPost> posts
+    ) {
+        return posts.stream()
+                .sorted(
+                        Comparator.comparing(
+                                this::effectiveDate,
+                                Comparator.nullsLast(
+                                        Comparator.reverseOrder()
+                                )
+                        )
+                )
+                .toList();
+    }
 
-        return List.copyOf(result);
+    private OffsetDateTime effectiveDate(
+            TelegramChannelPost post
+    ) {
+        if (post == null) {
+            return null;
+        }
+
+        if (post.getEditedAt() != null) {
+            return post.getEditedAt();
+        }
+
+        if (post.getPostedAt() != null) {
+            return post.getPostedAt();
+        }
+
+        return post.getCreatedAt();
     }
 
     private void addPost(
             List<TelegramChannelPost> result,
-            Set<Long> addedPostIds,
+            Set<Long> addedIds,
             TelegramChannelPost post,
             int limit
     ) {
-        if (result.size() >= limit) {
+        if (result.size() >= limit
+                || post == null
+                || post.getId() == null) {
             return;
         }
 
-        if (post == null || post.getId() == null) {
-            return;
-        }
-
-        if (addedPostIds.add(post.getId())) {
+        if (addedIds.add(post.getId())) {
             result.add(post);
         }
     }

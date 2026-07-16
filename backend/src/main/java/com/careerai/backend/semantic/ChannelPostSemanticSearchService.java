@@ -1,7 +1,6 @@
 package com.careerai.backend.semantic;
 
-import com.careerai.backend.channel.TelegramChannelPost;
-import com.careerai.backend.channel.TelegramChannelPostRepository;
+import com.careerai.backend.channel.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -24,17 +23,20 @@ public class ChannelPostSemanticSearchService {
 //    private final EmbeddingProvider embeddingProvider;
     private final SemanticEmbeddingRepository embeddingRepository;
     private final TelegramChannelPostRepository postRepository;
+    private final TelegramChannelPostMetadataRepository metadataRepository;
 
     public ChannelPostSemanticSearchService(
         SemanticSearchProperties properties,
 //        EmbeddingProvider embeddingProvider,
         SemanticEmbeddingRepository embeddingRepository,
-        TelegramChannelPostRepository postRepository
+        TelegramChannelPostRepository postRepository,
+        TelegramChannelPostMetadataRepository metadataRepository
     ) {
         this.properties = properties;
 //        this.embeddingProvider = embeddingProvider;
         this.embeddingRepository = embeddingRepository;
         this.postRepository = postRepository;
+        this.metadataRepository = metadataRepository;
     }
 
     /**
@@ -44,7 +46,7 @@ public class ChannelPostSemanticSearchService {
      * Optional со списком означает, что поиск был выполнен,
      * даже если уверенных совпадений не найдено.
      */
-    public Optional<List<ChannelPostSemanticMatch>> findRelevantPosts(EmbeddingResult queryEmbedding) {
+    public Optional<List<ChannelPostSemanticMatch>> findRelevantPosts(EmbeddingResult queryEmbedding, ChannelContentScope contentScope) {
         if (!properties.isEnabled()) {
             return Optional.empty();
         }
@@ -84,6 +86,19 @@ public class ChannelPostSemanticSearchService {
                     .map(SemanticEmbeddingVector::sourceId)
                     .toList();
 
+            Map<Long, TelegramChannelPostMetadata> metadataByPostId =
+                    metadataRepository.findSuccessfulByPostIds(postIds)
+                            .stream()
+                            .filter(metadata ->
+                                    metadata.getPost() != null
+                                            && metadata.getPost().getId() != null
+                            )
+                            .collect(Collectors.toMap(
+                                    metadata ->
+                                            metadata.getPost().getId(),
+                                    Function.identity()
+                            ));
+
             Map<Long, TelegramChannelPost> postsById =
                     postRepository.findAllById(postIds)
                             .stream()
@@ -107,6 +122,12 @@ public class ChannelPostSemanticSearchService {
                                     return null;
                                 }
 
+                                TelegramChannelPostMetadata metadata = metadataByPostId.get(storedEmbedding.sourceId());
+
+                                if (!isAllowedByScope(metadata, contentScope)) {
+                                    return null;
+                                }
+
                                 double similarity = cosineSimilarity(
                                         queryVector,
                                         storedEmbedding.values()
@@ -127,7 +148,8 @@ public class ChannelPostSemanticSearchService {
                             .toList();
 
             log.info(
-                    "Channel semantic search completed. candidates={}, selected={}, threshold={}, matches={}",
+                    "Channel semantic search completed. scope={}, candidates={}, selected={}, threshold={}, matches={}",
+                    contentScope,
                     storedEmbeddings.size(),
                     matches.size(),
                     properties.getChannelMinSimilarity(),
@@ -190,5 +212,38 @@ public class ChannelPostSemanticSearchService {
                         match.similarity()
                 ))
                 .collect(Collectors.joining(", "));
+    }
+
+    private boolean isAllowedByScope(TelegramChannelPostMetadata metadata, ChannelContentScope contentScope) {
+        if (metadata == null || metadata.getPostType() == null) {
+            return false;
+        }
+
+        ChannelContentScope safeScope =
+                contentScope == null
+                        ? ChannelContentScope.ALL_UPDATES
+                        : contentScope;
+
+        TelegramChannelPostType postType = metadata.getPostType();
+
+        return switch (safeScope) {
+            case VACANCIES -> postType == TelegramChannelPostType.VACANCY;
+            case EVENTS -> postType == TelegramChannelPostType.EVENT
+                    || postType == TelegramChannelPostType.ANNOUNCEMENT
+                    || postType == TelegramChannelPostType.OTHER;
+            case PRACTICE -> postType == TelegramChannelPostType.PRACTICE
+                    || Boolean.TRUE.equals(
+                            metadata.getRelevantForPractice()
+            );
+            case DEADLINES -> postType == TelegramChannelPostType.DEADLINE
+                    || hasText(metadata.getDeadlineText());
+
+            case ALL_UPDATES -> postType != TelegramChannelPostType.OTHER;
+            case NONE ->  false;
+        };
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 }

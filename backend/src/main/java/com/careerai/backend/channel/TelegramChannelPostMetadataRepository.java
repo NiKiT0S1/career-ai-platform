@@ -87,5 +87,16 @@ public interface TelegramChannelPostMetadataRepository extends JpaRepository<Tel
             """)
     List<TelegramChannelPostMetadata> findLatestSuccessfulPracticeRelated(Pageable pageable);
 
+    @Query("""
+        SELECT metadata
+        FROM TelegramChannelPostMetadata metadata
+        JOIN FETCH metadata.post post
+        WHERE metadata.extractionStatus = 'SUCCESS'
+          AND post.id IN :postIds
+        """)
+    List<TelegramChannelPostMetadata> findSuccessfulByPostIds(
+            @Param("postIds") Collection<Long> postIds
+    );
+
     Collection<TelegramChannelPostType> post(TelegramChannelPost post);
 }

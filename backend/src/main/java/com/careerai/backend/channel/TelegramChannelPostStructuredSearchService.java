@@ -3,10 +3,7 @@ package com.careerai.backend.channel;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
-import java.util.Collection;
-import java.util.List;
-import java.util.Locale;
-import java.util.Objects;
+import java.util.*;
 
 /**
  * Ищет релевантные Telegram-посты через структурированную metadata.
@@ -43,17 +40,76 @@ public class TelegramChannelPostStructuredSearchService {
      * @param limit    максимальное количество постов
      * @return список исходных Telegram-постов, выбранных через metadata
      */
-    public List<TelegramChannelPost> findRelevantPosts(ChannelQueryAnalysis analysis, int limit) {
-        if (analysis == null) {
+    public List<TelegramChannelPost> findRelevantPosts(
+            ChannelQueryAnalysis analysis,
+            int limit
+    ) {
+        if (analysis == null
+                || !analysis.needsChannelPosts()) {
             return List.of();
         }
 
-        return switch (analysis.intent()) {
-            case VACANCY -> findVacancyPosts(analysis, limit);
-            case PRACTICE -> findPracticePosts(limit);
-            case DEADLINE -> findDeadlinePosts(limit);
-            case GENERAL_UPDATES -> findGeneralUpdatePosts(limit);
-            case FAQ, GENERAL_CHAT, UNKNOWN -> List.of();
+        List<TelegramChannelPost> result =
+                new ArrayList<>();
+
+        Set<Long> addedIds =
+                new LinkedHashSet<>();
+
+        for (ChannelContentScope scope
+                : analysis.contentScopes()) {
+
+            List<TelegramChannelPost> scopePosts =
+                    findRelevantPostsForScope(
+                            analysis,
+                            scope,
+                            limit
+                    );
+
+            for (TelegramChannelPost post : scopePosts) {
+                if (result.size() >= limit) {
+                    return List.copyOf(result);
+                }
+
+                if (post != null
+                        && post.getId() != null
+                        && addedIds.add(post.getId())) {
+                    result.add(post);
+                }
+            }
+        }
+
+        return List.copyOf(result);
+    }
+
+    public List<TelegramChannelPost> findRelevantPostsForScope(
+            ChannelQueryAnalysis analysis,
+            ChannelContentScope scope,
+            int limit
+    ) {
+        if (analysis == null
+                || scope == null
+                || !analysis.needsChannelPosts()) {
+            return List.of();
+        }
+
+        return switch (scope) {
+            case VACANCIES ->
+                    findVacancyPosts(analysis, limit);
+
+            case EVENTS ->
+                    findEventPosts(limit);
+
+            case PRACTICE ->
+                    findPracticePosts(limit);
+
+            case DEADLINES ->
+                    findDeadlinePosts(limit);
+
+            case ALL_UPDATES ->
+                    findGeneralUpdatePosts(limit);
+
+            case NONE ->
+                    List.of();
         };
     }
 
@@ -77,6 +133,16 @@ public class TelegramChannelPostStructuredSearchService {
                 metadataRepository.findLatestSuccessfulVacancies(
                         PageRequest.of(0, limit)
                 )
+        );
+    }
+
+    private List<TelegramChannelPost> findEventPosts(int limit) {
+        return findByPostTypes(
+                List.of(
+                        TelegramChannelPostType.EVENT,
+                        TelegramChannelPostType.ANNOUNCEMENT
+                ),
+                limit
         );
     }
 
@@ -111,6 +177,16 @@ public class TelegramChannelPostStructuredSearchService {
                 ),
                 limit
         );
+    }
+
+    private List<TelegramChannelPost> findByIntentFallback(ChannelQueryAnalysis analysis, int limit) {
+        return switch (analysis.intent()) {
+            case VACANCY -> findVacancyPosts(analysis, limit);
+            case PRACTICE -> findPracticePosts(limit);
+            case DEADLINE -> findDeadlinePosts(limit);
+            case GENERAL_UPDATES ->  findGeneralUpdatePosts(limit);
+            case FAQ, GENERAL_CHAT,UNKNOWN -> List.of();
+        };
     }
 
     private List<TelegramChannelPost> findByPostTypes(Collection<TelegramChannelPostType> postTypes, int limit) {

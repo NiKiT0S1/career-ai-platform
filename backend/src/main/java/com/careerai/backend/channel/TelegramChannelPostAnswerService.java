@@ -38,6 +38,8 @@ public class TelegramChannelPostAnswerService {
 
     private static final int MAX_CONTEXT_POSTS = 8;
 
+    private static final int MAX_EXHAUSTIVE_CONTEXT_POSTS = 30;
+
     private static final ZoneId ASTANA_ZONE_ID = ZoneId.of("Asia/Almaty");
 
     private static final DateTimeFormatter DATE_TIME_FORMATTER =
@@ -91,15 +93,19 @@ public class TelegramChannelPostAnswerService {
                 ? findRelevantFaqEntries(queryEmbedding)
                 : List.of();
 
-        List<TelegramChannelPost> posts = shouldUseChannelPosts
-                ? findRelevantPosts(analysis, queryEmbedding)
-                : List.of();
+        ChannelPostSearchResult postSearchResult =
+                shouldUseChannelPosts
+                        ? findRelevantPosts(
+                        analysis,
+                        queryEmbedding
+                )
+                        : ChannelPostSearchResult.empty();
 
-        if (faqEntries.isEmpty() && posts.isEmpty()) {
+        if (faqEntries.isEmpty() && postSearchResult.isEmpty()) {
             return Optional.of(buildNoConfirmedInformationAnswer());
         }
 
-        String ragPrompt = buildCombinedRagPrompt(userMessage, analysis, faqEntries, posts);
+        String ragPrompt = buildCombinedRagPrompt(userMessage, analysis, faqEntries, postSearchResult);
 
         LlmResponse llmResponse = llmProvider.generateAnswer(ragPrompt);
 
@@ -114,27 +120,50 @@ public class TelegramChannelPostAnswerService {
                 llmResponse.errorType()
         );
 
-        return Optional.of(buildDirectFallbackAnswer(faqEntries, posts));
+        return Optional.of(buildDirectFallbackAnswer(faqEntries, postSearchResult.allPosts()));
     }
 
-    private List<TelegramChannelPost> findRelevantPosts(ChannelQueryAnalysis analysis, Optional<EmbeddingResult> queryEmbedding) {
-        List<TelegramChannelPost> posts = hybridSearchService.findRelevantPosts(
-                analysis,
-                queryEmbedding,
-                MAX_CONTEXT_POSTS
-        );
+    private ChannelPostSearchResult findRelevantPosts(
+            ChannelQueryAnalysis analysis,
+            Optional<EmbeddingResult> queryEmbedding
+    ) {
+        int limit = analysis.resultMode()
+                == ChannelResultMode.ALL_MATCHING
+                ? MAX_EXHAUSTIVE_CONTEXT_POSTS
+                : MAX_CONTEXT_POSTS;
 
-        if (!posts.isEmpty()) {
-            return posts;
+        ChannelPostSearchResult result =
+                hybridSearchService.findRelevantPosts(
+                        analysis,
+                        queryEmbedding,
+                        limit
+                );
+
+        if (!result.isEmpty()) {
+            return result;
         }
 
-        if (analysis.intent() == ChannelSearchIntent.GENERAL_UPDATES) {
-            return repository.findLatestTextPosts(
-                    PageRequest.of(0, MAX_CONTEXT_POSTS)
-            );
+        if (analysis.hasScope(
+                ChannelContentScope.ALL_UPDATES
+        )) {
+            List<TelegramChannelPost> latestPosts =
+                    repository.findLatestTextPosts(
+                            PageRequest.of(0, limit)
+                    );
+
+            if (!latestPosts.isEmpty()) {
+                return new ChannelPostSearchResult(
+                        List.of(
+                                new ChannelPostSearchGroup(
+                                        ChannelContentScope.ALL_UPDATES,
+                                        latestPosts
+                                )
+                        )
+                );
+            }
         }
 
-        return List.of();
+        return ChannelPostSearchResult.empty();
     }
 
     /**
@@ -162,7 +191,7 @@ public class TelegramChannelPostAnswerService {
         return fallbackEntries;
     }
 
-    private String buildCombinedRagPrompt(String userMessage, ChannelQueryAnalysis analysis, List<FaqEntry> faqEntries, List<TelegramChannelPost> posts) {
+    private String buildCombinedRagPrompt(String userMessage, ChannelQueryAnalysis analysis, List<FaqEntry> faqEntries, ChannelPostSearchResult postSearchResult) {
         StringBuilder prompt = new StringBuilder();
 
         String currentDateText = LocalDate
@@ -199,6 +228,10 @@ public class TelegramChannelPostAnswerService {
             - если вопрос про дедлайны, разделяй сроки по категориям;
             - не добавляй блок "Следующий шаг" в каждом ответе;
             - если совет действительно уместен, добавь его коротко в конце;
+            - учитывай contentScope как строгое ограничение категорий;
+            - при contentScope=EVENTS не упоминай вакансии;
+            - при contentScope=VACANCIES не упоминай мероприятия;
+            - при contentScope=PRACTICE не перечисляй несвязанные вакансии;
             - можно использовать только Telegram HTML-теги <b>, <i>;
             - не используй Markdown.
             
@@ -215,6 +248,17 @@ public class TelegramChannelPostAnswerService {
             - например, если сначала обещали подарок или напиток, а затем сообщили, что его не будет, ответ должен прямо сказать, что раздача отменена;
             - остальные подтверждённые условия мероприятия сохраняются, если они отдельно не отменялись;
             - перед формированием ответа мысленно сопоставь посты об одном событии и разреши все найденные противоречия.
+            
+            Правила по нескольким категориям:
+            - contentScopes перечислены в порядке, который запросил пользователь;
+            - отвечай отдельным разделом по каждой категории;
+            - не смешивай вакансии и мероприятия в одном списке;
+            - сначала покажи первую категорию, затем вторую;
+            - при resultMode=ALL_MATCHING не пропускай найденные основные записи;
+            - не представляй пост-уточнение как отдельную вакансию или отдельное мероприятие;
+            - уточнения, отмены и исправления нужно присоединять к связанному основному объявлению. Например, отмену о раздаче напитка или еще чего-то относить только к мероприятию, к которому он относится;
+            - не переноси отмену или условие с одного мероприятия на другое;
+            - если связь уточнения с конкретным событием не подтверждена, укажи уточнение отдельно, а не приписывай его другому мероприятию.
                 
             Правила по дедлайнам:
             - дедлайны и важные даты выделяй HTML-тегами <b><i>...</i></b>;
@@ -225,6 +269,16 @@ public class TelegramChannelPostAnswerService {
             - если дата невозможная или странная, например "32 июня" или "33 июня", не считай её актуальной датой и обязательно напиши, что дату нужно перепроверить;
             - если дедлайн указан неточно, например "не скоро", "в любое время", "как душа пожелает", не превращай его в точную дату;
             - если дедлайн не указан, так и напиши: "дедлайн не указан".
+            
+            Правила по спискам вакансий:
+            - если пользователь просит все вакансии из канала, можно перечислить все найденные записи;
+            - не называй весь список актуальным, если среди записей есть истёкшие, сомнительные или некорректные сроки;
+            - разделяй вакансии на блоки:
+              1. актуальные или с будущим дедлайном;
+              2. вакансии без точного дедлайна;
+              3. истёкшие или содержащие некорректную дату;
+            - формулировки "в любое время", "не скоро", "как душа пожелает" не подтверждают актуальность вакансии;
+            - невозможную дату нельзя считать действующим дедлайном.
                 
             Правила по производственной практике:
             - если в постах есть старый срок сдачи документов и более новый продлённый срок, главным указывай продлённый срок;
@@ -238,6 +292,13 @@ public class TelegramChannelPostAnswerService {
         prompt.append("\nРезультат анализа запроса:\n");
         prompt.append("intent: ").append(analysis.intent()).append("\n");
         prompt.append("topic: ").append(analysis.topic()).append("\n");
+        prompt.append("contentScopes: ")
+                .append(analysis.contentScopes())
+                .append("\n");
+
+        prompt.append("resultMode: ")
+                .append(analysis.resultMode())
+                .append("\n");
         prompt.append("needsChannelPosts: ").append(analysis.needsChannelPosts()).append("\n");
         prompt.append("needsFaq: ").append(analysis.needsFaq()).append("\n");
         prompt.append("needsDeadlines: ").append(analysis.needsDeadlines()).append("\n");
@@ -246,7 +307,7 @@ public class TelegramChannelPostAnswerService {
         prompt.append(userMessage).append("\n\n");
 
         appendFaqContext(prompt, faqEntries);
-        appendTelegramPostsContext(prompt, posts);
+        appendTelegramPostsContext(prompt, postSearchResult);
 
         prompt.append("""
                 
@@ -278,32 +339,50 @@ public class TelegramChannelPostAnswerService {
         }
     }
 
-    private void appendTelegramPostsContext(StringBuilder prompt, List<TelegramChannelPost> posts) {
+    private void appendTelegramPostsContext(
+            StringBuilder prompt,
+            ChannelPostSearchResult searchResult
+    ) {
         prompt.append("ПОСТЫ_ТЕЛЕГРАМ_КАНАЛА:\n");
 
-        if (posts.isEmpty()) {
-            prompt.append("Релевантные посты Telegram-канала не найдены или не требуются для этого вопроса.\n\n");
+        if (searchResult == null
+                || searchResult.isEmpty()) {
+            prompt.append(
+                    "Релевантные посты Telegram-канала "
+                            + "не найдены или не требуются.\n\n"
+            );
             return;
         }
 
-        List<TelegramChannelPost> orderedPosts = posts.stream()
-                .sorted(
-                        Comparator.comparing(
-                                this::getEffectiveDate,
-                                Comparator.nullsLast(
-                                        Comparator.reverseOrder()
-                                )
-                        )
-                )
-                .toList();
+        int globalPostNumber = 1;
 
-        for (int i = 0; i < orderedPosts.size(); i++) {
-            TelegramChannelPost post = orderedPosts.get(i);
+        for (ChannelPostSearchGroup group
+                : searchResult.groups()) {
 
-            prompt.append("ПОСТ ").append(i + 1).append(":\n");
-            prompt.append("Дата: ").append(formatPostDate(post)).append("\n");
-            prompt.append("Текст:\n");
-            prompt.append(post.getText()).append("\n\n");
+            prompt.append("КАТЕГОРИЯ: ")
+                    .append(group.scope())
+                    .append("\n");
+
+            prompt.append(
+                    "Публикации внутри категории "
+                            + "расположены от новых к старым.\n\n"
+            );
+
+            for (TelegramChannelPost post
+                    : group.posts()) {
+
+                prompt.append("ПОСТ ")
+                        .append(globalPostNumber++)
+                        .append(":\n");
+
+                prompt.append("Дата: ")
+                        .append(formatPostDate(post))
+                        .append("\n");
+
+                prompt.append("Текст:\n");
+                prompt.append(post.getText())
+                        .append("\n\n");
+            }
         }
     }
 

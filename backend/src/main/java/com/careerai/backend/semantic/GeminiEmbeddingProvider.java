@@ -142,9 +142,9 @@ public class GeminiEmbeddingProvider implements EmbeddingProvider {
             }
             catch (HttpClientErrorException.NotFound exception) {
                 log.error(
-                        "Gemini embedding model was not found. Model: {}",
+                        "Gemini embedding model was not found. Model: {}, status={}",
                         semanticProperties.getEmbeddingModel(),
-                        exception
+                        exception.getStatusCode()
                 );
 
                 return EmbeddingResult.failure(

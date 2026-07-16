@@ -7,6 +7,8 @@ import com.careerai.backend.faq.FaqEntryService;
 import com.careerai.backend.semantic.EmbeddingResult;
 import com.careerai.backend.semantic.FaqSemanticSearchService;
 import com.careerai.backend.semantic.SemanticQueryEmbeddingService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
@@ -31,6 +33,8 @@ import java.util.Set;
 
 @Service
 public class TelegramChannelPostAnswerService {
+
+    private static final Logger log = LoggerFactory.getLogger(TelegramChannelPostAnswerService.class);
 
     private static final int MAX_CONTEXT_POSTS = 8;
 
@@ -103,6 +107,13 @@ public class TelegramChannelPostAnswerService {
             return Optional.of(llmResponse.text());
         }
 
+        log.warn(
+                "Combined RAG answer generation failed. Using direct source fallback. provider={}, model={}, errorType={}",
+                llmResponse.provider(),
+                llmResponse.model(),
+                llmResponse.errorType()
+        );
+
         return Optional.of(buildDirectFallbackAnswer(faqEntries, posts));
     }
 
@@ -141,7 +152,14 @@ public class TelegramChannelPostAnswerService {
             return semanticResult.get();
         }
 
-        return faqEntryService.findActiveEntries();
+        List<FaqEntry> fallbackEntries = faqEntryService.findActiveEntries();
+
+        log.info(
+                "FAQ semantic search unavailable or empty. Using stable FAQ fallback. entries={}",
+                fallbackEntries.size()
+        );
+
+        return fallbackEntries;
     }
 
     private String buildCombinedRagPrompt(String userMessage, ChannelQueryAnalysis analysis, List<FaqEntry> faqEntries, List<TelegramChannelPost> posts) {

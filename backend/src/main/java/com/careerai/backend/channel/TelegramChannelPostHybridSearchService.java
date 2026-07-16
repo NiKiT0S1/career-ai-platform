@@ -54,6 +54,17 @@ public class TelegramChannelPostHybridSearchService {
 
         List<ChannelPostSemanticMatch> semanticMatches = semanticResult.get();
 
+        if (semanticMatches.isEmpty()) {
+            log.info(
+                    "Hybrid channel search found no confident semantic matches. Using structured results. structured={}",
+                    structuredPosts.size()
+            );
+
+            return structuredPosts.stream()
+                    .limit(safeLimit)
+                    .toList();
+        }
+
         List<TelegramChannelPost> result = new ArrayList<>();
         Set<Long> addedPostIds = new LinkedHashSet<>();
 

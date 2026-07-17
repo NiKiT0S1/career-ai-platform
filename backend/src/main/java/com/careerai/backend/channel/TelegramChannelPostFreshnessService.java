@@ -158,7 +158,7 @@ public class TelegramChannelPostFreshnessService {
     ) {
         return post.getFreshnessStatus()
                 != evaluation.status()
-                || !Objects.equals(
+                || !representsSameInstant(
                 post.getExpiresAt(),
                 evaluation.expiresAt()
         )
@@ -166,5 +166,20 @@ public class TelegramChannelPostFreshnessService {
                 post.getFreshnessReason(),
                 evaluation.reason()
         );
+    }
+
+    /**
+     * Сравнивает два значения времени по реальному моменту,
+     * не учитывая различия часового смещения.
+     */
+    private boolean representsSameInstant(
+            OffsetDateTime first,
+            OffsetDateTime second
+    ) {
+        if (first == null || second == null) {
+            return first == second;
+        }
+
+        return first.isEqual(second);
     }
 }

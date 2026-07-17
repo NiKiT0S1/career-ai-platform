@@ -56,6 +56,55 @@ public class TelegramChannelPost {
     @Column(name = "edited_at")
     private OffsetDateTime editedAt;
 
+    /**
+     * Текущее состояние актуальности публикации.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "freshness_status", nullable = false)
+    private TelegramChannelPostFreshnessStatus freshnessStatus = TelegramChannelPostFreshnessStatus.UNKNOWN;
+
+    /**
+     * Момент, после которого публикация считается истёкшей.
+     *
+     * Пока может быть null, если срок не удалось определить.
+     */
+    @Column(name = "expires_at")
+    private OffsetDateTime expiresAt;
+
+    /**
+     * Объяснение установленного freshness-статуса.
+     *
+     * Например: "дедлайн уже прошёл" или
+     * "невозможно распознать дату 33 июня".
+     */
+    @Column(name = "freshness_reason", columnDefinition = "TEXT")
+    private String freshnessReason;
+
+    /**
+     * Время последней проверки актуальности.
+     */
+    @Column(name = "freshness_checked_at")
+    private OffsetDateTime freshnessCheckedAt;
+
+    /**
+     * Показывает, исключил ли администратор публикацию
+     * из обычных ответов бота.
+     */
+    @Column(name = "is_archived", nullable = false)
+    private boolean archived;
+
+    /**
+     * Время ручного архивирования.
+     */
+    @Column(name = "archived_at")
+    private OffsetDateTime archivedAt;
+
+    /**
+     * Причина ручного архивирования.
+     */
+    @Column(name = "archive_reason", columnDefinition = "TEXT")
+    private String archivedReason;
+
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;
 
@@ -65,6 +114,10 @@ public class TelegramChannelPost {
     @PrePersist
     void prePersist() {
         OffsetDateTime now = OffsetDateTime.now();
+
+        if (freshnessStatus == null) {
+            freshnessStatus = TelegramChannelPostFreshnessStatus.UNKNOWN;
+        }
 
         if (createdAt == null) {
             createdAt = now;

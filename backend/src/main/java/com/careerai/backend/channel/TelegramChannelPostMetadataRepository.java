@@ -37,6 +37,8 @@ public interface TelegramChannelPostMetadataRepository extends JpaRepository<Tel
             JOIN FETCH metadata.post post
             WHERE metadata.extractionStatus = 'SUCCESS'
               AND metadata.postType IN :postTypes
+              AND post.archived = false
+              AND post.freshnessStatus IN ('ACTIVE', 'UNKNOWN')
             ORDER BY COALESCE(post.editedAt, post.postedAt, post.createdAt) DESC
             """)
     List<TelegramChannelPostMetadata> findLatestSuccessfulByPostTypes(
@@ -50,6 +52,8 @@ public interface TelegramChannelPostMetadataRepository extends JpaRepository<Tel
             JOIN FETCH metadata.post post
             WHERE metadata.extractionStatus = 'SUCCESS'
               AND metadata.postType = 'VACANCY'
+              AND post.archived = false
+              AND post.freshnessStatus IN ('ACTIVE', 'UNKNOWN')
             ORDER BY COALESCE(post.editedAt, post.postedAt, post.createdAt) DESC
             """)
     List<TelegramChannelPostMetadata> findLatestSuccessfulVacancies(Pageable pageable);
@@ -60,6 +64,8 @@ public interface TelegramChannelPostMetadataRepository extends JpaRepository<Tel
             JOIN FETCH metadata.post post
             WHERE metadata.extractionStatus = 'SUCCESS'
               AND metadata.postType = 'VACANCY'
+              AND post.archived = false
+              AND post.freshnessStatus IN ('ACTIVE', 'UNKNOWN')
               AND (
                     LOWER(COALESCE(metadata.title, '')) LIKE LOWER(CONCAT('%', :keyword, '%'))
                  OR LOWER(COALESCE(metadata.company, '')) LIKE LOWER(CONCAT('%', :keyword, '%'))
@@ -79,6 +85,8 @@ public interface TelegramChannelPostMetadataRepository extends JpaRepository<Tel
             FROM TelegramChannelPostMetadata metadata
             JOIN FETCH metadata.post post
             WHERE metadata.extractionStatus = 'SUCCESS'
+              AND post.archived = false
+              AND post.freshnessStatus IN ('ACTIVE', 'UNKNOWN')
               AND (
                     metadata.postType = 'PRACTICE'
                  OR metadata.relevantForPractice = true
@@ -93,6 +101,8 @@ public interface TelegramChannelPostMetadataRepository extends JpaRepository<Tel
         JOIN FETCH metadata.post post
         WHERE metadata.extractionStatus = 'SUCCESS'
           AND post.id IN :postIds
+          AND post.archived = false
+          AND post.freshnessStatus IN ('ACTIVE', 'UNKNOWN')
         """)
     List<TelegramChannelPostMetadata> findSuccessfulByPostIds(
             @Param("postIds") Collection<Long> postIds

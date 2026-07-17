@@ -147,7 +147,7 @@ public class TelegramChannelPostAnswerService {
                 ChannelContentScope.ALL_UPDATES
         )) {
             List<TelegramChannelPost> latestPosts =
-                    repository.findLatestTextPosts(
+                    repository.findLatestSearchableTextPosts(
                             PageRequest.of(0, limit)
                     );
 

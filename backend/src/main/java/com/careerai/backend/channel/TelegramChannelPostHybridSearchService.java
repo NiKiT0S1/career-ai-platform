@@ -322,7 +322,8 @@ public class TelegramChannelPostHybridSearchService {
     ) {
         if (result.size() >= limit
                 || post == null
-                || post.getId() == null) {
+                || post.getId() == null
+                || !post.isSearchable()) {
             return;
         }
 

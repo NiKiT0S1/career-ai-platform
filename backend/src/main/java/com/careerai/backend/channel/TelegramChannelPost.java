@@ -111,6 +111,19 @@ public class TelegramChannelPost {
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt;
 
+    /**
+     * Определяет, разрешено ли использовать публикацию
+     * в обычных ответах бота.
+     *
+     * Посты без определённой даты остаются доступными,
+     * поскольку среди них могут быть важные объявления,
+     * исправления и отмены.
+     */
+    public boolean isSearchable() {
+        return !archived &&
+                (freshnessStatus == TelegramChannelPostFreshnessStatus.ACTIVE || freshnessStatus == TelegramChannelPostFreshnessStatus.UNKNOWN);
+    }
+
     @PrePersist
     void prePersist() {
         OffsetDateTime now = OffsetDateTime.now();

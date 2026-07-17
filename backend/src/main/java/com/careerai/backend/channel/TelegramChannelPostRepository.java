@@ -18,12 +18,48 @@ public interface TelegramChannelPostRepository extends JpaRepository<TelegramCha
 
     Optional<TelegramChannelPost> findByTelegramChatIdAndTelegramMessageId(Long telegramChatId, Long telegramMessageId);
 
+    /**
+     * Возвращает последние текстовые посты независимо
+     * от freshness и архивного состояния.
+     *
+     * Используется служебной индексацией.
+     */
     @Query("""
             SELECT post
             FROM TelegramChannelPost post
             WHERE post.text IS NOT NULL
               AND LENGTH(TRIM(post.text)) > 0
-            ORDER BY COALESCE(post.editedAt, post.postedAt, post.createdAt) DESC
+            ORDER BY COALESCE(
+                post.editedAt,
+                post.postedAt,
+                post.createdAt
+            ) DESC
             """)
-    List<TelegramChannelPost> findLatestTextPosts(Pageable pageable);
+    List<TelegramChannelPost> findLatestTextPosts(
+            Pageable pageable
+    );
+
+    /**
+     * Возвращает только публикации, которые разрешено
+     * использовать в обычных ответах бота.
+     */
+    @Query("""
+            SELECT post
+            FROM TelegramChannelPost post
+            WHERE post.text IS NOT NULL
+              AND LENGTH(TRIM(post.text)) > 0
+              AND post.archived = false
+              AND post.freshnessStatus IN (
+                  'ACTIVE',
+                  'UNKNOWN'
+              )
+            ORDER BY COALESCE(
+                post.editedAt,
+                post.postedAt,
+                post.createdAt
+            ) DESC
+            """)
+    List<TelegramChannelPost> findLatestSearchableTextPosts(
+            Pageable pageable
+    );
 }

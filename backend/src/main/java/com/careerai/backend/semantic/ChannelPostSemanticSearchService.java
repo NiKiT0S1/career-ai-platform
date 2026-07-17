@@ -118,7 +118,7 @@ public class ChannelPostSemanticSearchService {
                                                 storedEmbedding.sourceId()
                                         );
 
-                                if (post == null) {
+                                if (post == null || !post.isSearchable()) {
                                     return null;
                                 }
 

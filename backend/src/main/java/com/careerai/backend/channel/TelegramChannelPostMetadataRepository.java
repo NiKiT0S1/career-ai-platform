@@ -98,5 +98,12 @@ public interface TelegramChannelPostMetadataRepository extends JpaRepository<Tel
             @Param("postIds") Collection<Long> postIds
     );
 
+    @Query("""
+        SELECT metadata
+        FROM TelegramChannelPostMetadata metadata
+        JOIN FETCH metadata.post post
+        """)
+    List<TelegramChannelPostMetadata> findAllWithPosts();
+
     Collection<TelegramChannelPostType> post(TelegramChannelPost post);
 }

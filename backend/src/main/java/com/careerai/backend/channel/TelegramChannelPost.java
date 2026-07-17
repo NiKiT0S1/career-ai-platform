@@ -103,7 +103,7 @@ public class TelegramChannelPost {
      * Причина ручного архивирования.
      */
     @Column(name = "archive_reason", columnDefinition = "TEXT")
-    private String archivedReason;
+    private String archiveReason;
 
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;

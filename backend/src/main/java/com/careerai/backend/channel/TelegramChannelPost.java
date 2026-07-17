@@ -5,6 +5,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.time.OffsetDateTime;
+import java.util.Objects;
 
 /**
  * Сущность Telegram-поста из канала ЦКиТа.
@@ -122,6 +123,46 @@ public class TelegramChannelPost {
     public boolean isSearchable() {
         return !archived &&
                 (freshnessStatus == TelegramChannelPostFreshnessStatus.ACTIVE || freshnessStatus == TelegramChannelPostFreshnessStatus.UNKNOWN);
+    }
+
+    /**
+     * Архивирует публикацию вручную.
+     *
+     * @return true, если состояние публикации изменилось
+     */
+    public boolean archive(
+            OffsetDateTime archivedAt,
+            String archiveReason
+    ) {
+        if (archived) {
+            return false;
+        }
+
+        this.archived = true;
+        this.archivedAt = Objects.requireNonNull(
+                archivedAt,
+                "Время архивирования не может быть null"
+        );
+        this.archiveReason = archiveReason;
+
+        return true;
+    }
+
+    /**
+     * Восстанавливает публикацию из ручного архива.
+     *
+     * @return true, если состояние публикации изменилось
+     */
+    public boolean restoreFromArchive() {
+        if (!archived) {
+            return false;
+        }
+
+        archived = false;
+        archivedAt = null;
+        archiveReason = null;
+
+        return true;
     }
 
     @PrePersist

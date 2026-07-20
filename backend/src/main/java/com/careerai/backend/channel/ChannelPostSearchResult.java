@@ -6,20 +6,41 @@ import java.util.Map;
 
 /**
  * Итог гибридного поиска, разделённый по категориям.
+ *
+ * Помимо найденных публикаций содержит явные связи
+ * между исходными постами и их уточнениями.
  */
 
 public record ChannelPostSearchResult(
-        List<ChannelPostSearchGroup> groups
+        List<ChannelPostSearchGroup> groups,
+        List<TelegramChannelPostRelation> relations
 ) {
 
     public ChannelPostSearchResult {
         groups = groups == null
                 ? List.of()
                 : List.copyOf(groups);
+
+        relations = relations == null
+                ? List.of()
+                : List.copyOf(relations);
+    }
+
+    /**
+     * Оставляет совместимость с существующим кодом,
+     * который передаёт только группы.
+     */
+    public ChannelPostSearchResult(
+            List<ChannelPostSearchGroup> groups
+    ) {
+        this(groups, List.of());
     }
 
     public static ChannelPostSearchResult empty() {
-        return new ChannelPostSearchResult(List.of());
+        return new ChannelPostSearchResult(
+                List.of(),
+                List.of()
+        );
     }
 
     public boolean isEmpty() {

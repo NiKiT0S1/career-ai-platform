@@ -34,15 +34,22 @@ public class TelegramChannelPostHybridSearchService {
     private final ChannelPostSemanticSearchService
             semanticSearchService;
 
+    private final TelegramChannelPostRelationExpansionService
+            relationExpansionService;
+
     public TelegramChannelPostHybridSearchService(
             TelegramChannelPostStructuredSearchService structuredSearchService,
-            ChannelPostSemanticSearchService semanticSearchService
+            ChannelPostSemanticSearchService semanticSearchService,
+            TelegramChannelPostRelationExpansionService relationExpansionService
     ) {
         this.structuredSearchService =
                 structuredSearchService;
 
         this.semanticSearchService =
                 semanticSearchService;
+
+        this.relationExpansionService =
+                relationExpansionService;
     }
 
     public ChannelPostSearchResult findRelevantPosts(
@@ -135,18 +142,15 @@ public class TelegramChannelPostHybridSearchService {
             );
         }
 
-        ChannelPostSearchResult result =
+        ChannelPostSearchResult baseResult =
                 new ChannelPostSearchResult(groups);
 
-        log.info(
-                "Hybrid channel search completed. "
-                        + "scopes={}, mode={}, groups={}, "
-                        + "selected={}",
-                analysis.contentScopes(),
-                analysis.resultMode(),
-                groups.size(),
-                result.allPosts().size()
-        );
+        ChannelPostSearchResult result =
+                relationExpansionService.expand(
+                        baseResult
+                );
+
+        log.info("Hybrid channel search completed. scopes={}, mode={}, groups={}, selected={}, relations={}", analysis.contentScopes(), analysis.resultMode(), result.groups().size(), result.allPosts().size(), result.relations().size());
 
         return result;
     }

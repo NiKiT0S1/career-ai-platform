@@ -16,11 +16,7 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.util.Comparator;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
 
 /**
  * Формирует ответы на основе внутренних источников знаний ЦКиТ:
@@ -247,7 +243,25 @@ public class TelegramChannelPostAnswerService {
             - если отменено только одно условие, не отменяй автоматически остальные условия;
             - например, если сначала обещали подарок или напиток, а затем сообщили, что его не будет, ответ должен прямо сказать, что раздача отменена;
             - остальные подтверждённые условия мероприятия сохраняются, если они отдельно не отменялись;
-            - перед формированием ответа мысленно сопоставь посты об одном событии и разреши все найденные противоречия.
+            - точную область изменения запрещено расширять до более широкой категории;
+            - если отменена раздача конкретного предмета, напитка, подарка или бонуса, считай отменённым только этот конкретный объект;
+            - например, отмена раздачи Hennessy не означает, что отменены все напитки, подарки или активности мероприятия;
+            - или, например, отмена раздачи Coca-Cola не означает, что отменены все бонусы, включая SOCIAL GPA;
+            - не заменяй формулировку "отменена раздача конкретного предмета" на "ничего раздавать не будут";
+            - если пользователь спрашивает, будут ли что-либо раздавать, а подтверждена только отмена одного конкретного предмета, назови этот предмет и скажи, что по другим подаркам подтверждённой информации нет;
+            - не утверждай отсутствие других подарков, напитков или бонусов, если этого прямо нет в источниках.
+            - перед формированием ответа мысленно сопоставь посты об одном событии и разреши все найденные противоречия;
+            - каждая ПОДТВЕРЖДЁННАЯ_ЦЕПОЧКА_ПУБЛИКАЦИЙ является отдельной независимой темой;
+            - исходная публикация и более новое уточнение внутри одной цепочки относятся только друг к другу;
+            - связь UPDATE означает дополнение исходной информации;
+            - связь CORRECTION означает исправление ранее опубликованных данных;
+            - связь CANCELLATION означает отмену всей публикации или отдельного условия, указанного в точной области изменения;
+            - запрещено переносить уточнение, исправление или отмену из одной цепочки в другую;
+            - если пользователь упомянул конкретный предмет, компанию, напиток, условие или название, используй только ту цепочку, где это упоминание присутствует в тексте или в точной области изменения;
+            - не перечисляй другие цепочки, если пользователь задал вопрос только об одном конкретном мероприятии или условии;
+            - связь CANCELLATION применяется только к исходному postId, указанному внутри той же цепочки;
+            - при CANCELLATION не отменяй автоматически всё мероприятие, если в точной области изменения отменено только одно условие;
+            - внутренние postId нужны только для сопоставления источников и не должны показываться пользователю.
             
             Правила по нескольким категориям:
             - contentScopes перечислены в порядке, который запросил пользователь;
@@ -354,6 +368,11 @@ public class TelegramChannelPostAnswerService {
             return;
         }
 
+        Set<Long> relatedPostIds =
+                collectRelatedPostIds(
+                        searchResult.relations()
+                );
+
         int globalPostNumber = 1;
 
         for (ChannelPostSearchGroup group
@@ -364,16 +383,30 @@ public class TelegramChannelPostAnswerService {
                     .append("\n");
 
             prompt.append(
-                    "Публикации внутри категории "
+                    "Обычные публикации внутри категории "
                             + "расположены от новых к старым.\n\n"
             );
+
+            int standalonePostCount = 0;
 
             for (TelegramChannelPost post
                     : group.posts()) {
 
+                if (post == null
+                        || post.getId() == null
+                        || relatedPostIds.contains(
+                        post.getId()
+                )) {
+                    continue;
+                }
+
                 prompt.append("ПОСТ ")
                         .append(globalPostNumber++)
                         .append(":\n");
+
+                prompt.append("Внутренний postId: ")
+                        .append(post.getId())
+                        .append("\n");
 
                 prompt.append("Дата: ")
                         .append(formatPostDate(post))
@@ -382,8 +415,22 @@ public class TelegramChannelPostAnswerService {
                 prompt.append("Текст:\n");
                 prompt.append(post.getText())
                         .append("\n\n");
+
+                standalonePostCount++;
+            }
+
+            if (standalonePostCount == 0) {
+                prompt.append(
+                        "Все найденные публикации этой категории "
+                                + "входят в подтверждённые цепочки ниже.\n\n"
+                );
             }
         }
+
+        appendTelegramPostRelationThreadsContext(
+                prompt,
+                searchResult.relations()
+        );
     }
 
     private String buildNoConfirmedInformationAnswer() {
@@ -519,5 +566,249 @@ public class TelegramChannelPostAnswerService {
             case VACANCY, DEADLINE, GENERAL_UPDATES -> true;
             case PRACTICE, FAQ, GENERAL_CHAT, UNKNOWN -> false;
         };
+    }
+
+    /**
+     * Передаёт связанные публикации как отдельные цепочки.
+     *
+     * Все обновления, исправления и отмены одного исходного
+     * поста объединяются внутри одной цепочки.
+     */
+    private void appendTelegramPostRelationThreadsContext(
+            StringBuilder prompt,
+            List<TelegramChannelPostRelation> relations
+    ) {
+        if (relations == null || relations.isEmpty()) {
+            return;
+        }
+
+        Map<Long, List<TelegramChannelPostRelation>> relationsByTargetPostId = new LinkedHashMap<>();
+
+        for (TelegramChannelPostRelation relation : relations) {
+            if (!hasValidRelationPosts(relation)) {
+                continue;
+            }
+
+            Long targetPostId = relation.getTargetPost().getId();
+
+            relationsByTargetPostId
+                    .computeIfAbsent(
+                            targetPostId,
+                            ignored -> new ArrayList<>()
+                    )
+                    .add(relation);
+        }
+
+        if (relationsByTargetPostId.isEmpty()) {
+            return;
+        }
+
+        prompt.append(
+                "ПОДТВЕРЖДЁННЫЕ_ЦЕПОЧКИ_ПУБЛИКАЦИЙ:\n"
+        );
+
+        prompt.append(
+                "Каждая цепочка относится к одному исходному "
+                        + "объявлению. Все изменения внутри цепочки "
+                        + "нужно объединить с исходной публикацией. "
+                        + "Запрещено представлять изменения как "
+                        + "самостоятельные мероприятия.\n\n"
+        );
+
+        int threadNumber = 1;
+
+        for (List<TelegramChannelPostRelation> targetRelations
+                : relationsByTargetPostId.values()) {
+
+            TelegramChannelPost targetPost =
+                    targetRelations
+                            .getFirst()
+                            .getTargetPost();
+
+            prompt.append("ЦЕПОЧКА ")
+                    .append(threadNumber++)
+                    .append(":\n");
+
+            prompt.append(
+                    "Все изменения ниже относятся только "
+                            + "к исходному postId="
+            );
+
+            prompt.append(targetPost.getId())
+                    .append(".\n\n");
+
+            appendTelegramPostContext(
+                    prompt,
+                    "ИСХОДНАЯ ПУБЛИКАЦИЯ",
+                    targetPost
+            );
+
+            int changeNumber = 1;
+
+            for (TelegramChannelPostRelation relation
+                    : targetRelations) {
+
+                TelegramChannelPost sourcePost =
+                        relation.getSourcePost();
+
+                prompt.append("ИЗМЕНЕНИЕ ")
+                        .append(changeNumber++)
+                        .append(":\n");
+
+                appendTelegramPostContext(
+                        prompt,
+                        "БОЛЕЕ НОВАЯ ПУБЛИКАЦИЯ",
+                        sourcePost
+                );
+
+                prompt.append("Тип связи: ")
+                        .append(relation.getRelationType())
+                        .append("\n");
+
+                prompt.append("Точная область изменения: ")
+                        .append(relation.getReason())
+                        .append("\n");
+
+                appendRelationApplicationRule(
+                        prompt,
+                        relation
+                );
+
+                prompt.append("\n");
+            }
+
+            prompt.append(
+                    "Итог: представь эту цепочку как одно "
+                            + "объявление с учётом всех перечисленных "
+                            + "изменений. Не создавай отдельное "
+                            + "мероприятие для каждого изменения.\n\n"
+            );
+        }
+    }
+
+    /**
+     * Собирает идентификаторы постов,
+     * входящих в подтверждённые связи.
+     */
+    private Set<Long> collectRelatedPostIds(
+            List<TelegramChannelPostRelation> relations
+    ) {
+        Set<Long> postIds =
+                new LinkedHashSet<>();
+
+        if (relations == null) {
+            return postIds;
+        }
+
+        for (TelegramChannelPostRelation relation
+                : relations) {
+
+            if (relation == null) {
+                continue;
+            }
+
+            TelegramChannelPost sourcePost =
+                    relation.getSourcePost();
+
+            TelegramChannelPost targetPost =
+                    relation.getTargetPost();
+
+            if (sourcePost != null
+                    && sourcePost.getId() != null) {
+                postIds.add(sourcePost.getId());
+            }
+
+            if (targetPost != null
+                    && targetPost.getId() != null) {
+                postIds.add(targetPost.getId());
+            }
+        }
+
+        return postIds;
+    }
+
+    /**
+     * Добавляет одну Telegram-публикацию
+     * во внутренний RAG-контекст.
+     */
+    private void appendTelegramPostContext(
+            StringBuilder prompt,
+            String heading,
+            TelegramChannelPost post
+    ) {
+        prompt.append(heading)
+                .append(":\n");
+
+        prompt.append("postId: ")
+                .append(post.getId())
+                .append("\n");
+
+        prompt.append("Дата публикации: ")
+                .append(formatPostDate(post))
+                .append("\n");
+
+        prompt.append("Текст:\n")
+                .append(
+                        post.getText() == null
+                                ? ""
+                                : post.getText()
+                )
+                .append("\n\n");
+    }
+
+    private boolean hasValidRelationPosts(TelegramChannelPostRelation relation) {
+        return relation != null
+                && relation.getSourcePost() != null
+                && relation.getSourcePost().getId() != null
+                && relation.getTargetPost() != null
+                && relation.getTargetPost().getId() != null;
+    }
+
+    /**
+     * Объясняет LLM, как применять конкретный тип связи.
+     */
+    private void appendRelationApplicationRule(
+            StringBuilder prompt,
+            TelegramChannelPostRelation relation
+    ) {
+        TelegramChannelPostRelationType relationType =
+                relation.getRelationType();
+
+        if (relationType == null) {
+            prompt.append(
+                    "Примени изменение только к исходной "
+                            + "публикации этой цепочки.\n"
+            );
+            return;
+        }
+
+        switch (relationType) {
+            case UPDATE -> prompt.append(
+                    "Это дополнение. Добавь новые сведения "
+                            + "к исходному объявлению, не создавая "
+                            + "отдельное мероприятие.\n"
+            );
+
+            case CORRECTION -> prompt.append(
+                    "Это исправление. Замени соответствующие "
+                            + "старые сведения новыми, остальные "
+                            + "условия сохрани.\n"
+            );
+
+            case CANCELLATION -> prompt.append(
+                    "Это точечная отмена. Отмени только то, "
+                            + "что прямо указано в области изменения. "
+                            + "Не отменяй другие подарки, бонусы, "
+                            + "условия или само мероприятие.\n"
+            );
+        }
+
+        prompt.append(
+                "Применяй изменение только к исходному postId="
+        );
+
+        prompt.append(
+                relation.getTargetPost().getId()
+        ).append(".\n");
     }
 }

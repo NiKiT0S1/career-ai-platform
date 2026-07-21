@@ -10,16 +10,12 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Реализация {@link LlmProvider} через Groq API.
- *
- * Groq используется как быстрый экспериментальный AI-провайдер для сравнения с Gemini.
- * Он принимает запросы в OpenAI-compatible формате: system/user messages, model,
- * temperature и max_tokens. Это позволяет тестировать разные модели без изменения
- * Telegram-логики бота.
+ * Реализация LlmProvider через Groq API.
  */
 
 @Service
@@ -29,7 +25,8 @@ public class GroqLlmProvider implements LlmProvider {
 
     private final GroqProperties properties;
     private final ObjectMapper objectMapper;
-    private final RestClient restClient;
+    private final RestClient fastRestClient;
+    private final RestClient standardRestClient;
 
     public GroqLlmProvider(
             GroqProperties properties,
@@ -38,27 +35,23 @@ public class GroqLlmProvider implements LlmProvider {
         this.properties = properties;
         this.objectMapper = objectMapper;
 
-        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(Duration.ofSeconds(properties.getConnectTimeoutSeconds()));
-        requestFactory.setReadTimeout(Duration.ofSeconds(properties.getReadTimeoutSeconds()));
+        this.fastRestClient = createRestClient(Duration.ofSeconds(3), Duration.ofSeconds(4));
 
-        this.restClient = RestClient.builder()
-                .requestFactory(requestFactory)
-                .build();
+        this.standardRestClient = createRestClient(
+                Duration.ofSeconds(properties.getConnectTimeoutSeconds()),
+                Duration.ofSeconds(properties.getReadTimeoutSeconds())
+        );
     }
 
     @Override
-    public LlmResponse generateAnswer(String userMessage) {
+    public LlmResponse execute(LlmRequest request) {
         long startedAt = System.nanoTime();
 
         if (properties.getKey() == null || properties.getKey().isBlank()) {
-            log.warn("Groq API key is not configured");
+            log.warn("Groq API key is not configured. taskType={}", request.taskType());
 
-            return LlmResponse.failure("""
-                    Groq API key не настроен.
-                    
-                    Проверь переменную окружения GROQ_API_KEY.
-                    """,
+            return LlmResponse.failure(
+                    "Groq API key is not configured",
                     "Groq",
                     properties.getModel(),
                     LlmErrorType.UNEXPECTED_ERROR,
@@ -67,15 +60,9 @@ public class GroqLlmProvider implements LlmProvider {
         }
 
         try {
-            String answer = callGroq(userMessage);
+            String answer = callGroq(request);
 
-            log.info(
-                    "Groq request succeeded in {} ms. Model: {}. User message length: {}. Answer length: {}",
-                    elapsedMillis(startedAt),
-                    properties.getModel(),
-                    safeLength(userMessage),
-                    safeLength(answer)
-            );
+            log.info("Groq request succeeded. taskType={}, model={}, elapsedMs={}, promptLength={}, answerLength={}", request.taskType(), properties.getModel(), elapsedMillis(startedAt), safeLength(request.userPrompt()), safeLength(answer));
 
             return LlmResponse.success(
                     answer,
@@ -85,17 +72,10 @@ public class GroqLlmProvider implements LlmProvider {
             );
         }
         catch (HttpClientErrorException.TooManyRequests e) {
-            log.warn(
-                    "Groq request got 429 after {} ms. Model: {}",
-                    elapsedMillis(startedAt),
-                    properties.getModel()
-            );
+            log.warn("Groq request got 429. taskType={}, model={}, elapsedMs={}", request.taskType(), properties.getModel(), elapsedMillis(startedAt));
 
-            return LlmResponse.failure("""
-                    Groq временно ограничил количество запросов.
-                    
-                    Попробуй повторить вопрос чуть позже.
-                    """,
+            return LlmResponse.failure(
+                    "Groq rate limit",
                     "Groq",
                     properties.getModel(),
                     LlmErrorType.RATE_LIMIT,
@@ -103,17 +83,10 @@ public class GroqLlmProvider implements LlmProvider {
             );
         }
         catch (HttpClientErrorException.NotFound e) {
-            log.error(
-                    "Groq model was not found. Check groq.api.model value. Model: {}",
-                    properties.getModel(),
-                    e
-            );
+            log.error("Groq model was not found. taskType={}, model={}", request.taskType(), properties.getModel(), e);
 
-            return LlmResponse.failure("""
-                    Groq-модель настроена некорректно.
-                    
-                    Проверь значение groq.api.model в application.properties.
-                    """,
+            return LlmResponse.failure(
+                    "Groq model was not found",
                     "Groq",
                     properties.getModel(),
                     LlmErrorType.MODEL_NOT_FOUND,
@@ -121,36 +94,21 @@ public class GroqLlmProvider implements LlmProvider {
             );
         }
         catch (org.springframework.web.client.ResourceAccessException e) {
-            log.warn(
-                    "Groq request failed by timeout/network error after {} ms. Model: {}",
-                    elapsedMillis(startedAt),
-                    properties.getModel()
-            );
+            log.warn("Groq timeout or network error. taskType={}, model={}, elapsedMs={}", request.taskType(), properties.getModel(), elapsedMillis(startedAt));
 
-            return LlmResponse.failure("""
-                Groq сейчас отвечает слишком долго или временно недоступен.
-                
-                Попробуй повторить вопрос чуть позже.
-                """,
-                "Groq",
-                properties.getModel(),
-                LlmErrorType.TIMEOUT,
-                elapsedMillis(startedAt)
+            return LlmResponse.failure(
+                    "Groq timeout or network error",
+                    "Groq",
+                    properties.getModel(),
+                    LlmErrorType.TIMEOUT,
+                    elapsedMillis(startedAt)
             );
         }
         catch (Exception e) {
-            log.error(
-                    "Unexpected error while calling Groq API after {} ms. Model: {}",
-                    elapsedMillis(startedAt),
-                    properties.getModel(),
-                    e
-            );
+            log.error("Unexpected Groq error. taskType={}, model={}, elapsedMs={}", request.taskType(), properties.getModel(), elapsedMillis(startedAt), e);
 
-            return LlmResponse.failure("""
-                    Сейчас я не могу обработать запрос через Groq.
-                    
-                    Попробуй чуть позже.
-                    """,
+            return LlmResponse.failure(
+                    "Unexpected Groq error",
                     "Groq",
                     properties.getModel(),
                     LlmErrorType.UNEXPECTED_ERROR,
@@ -159,53 +117,122 @@ public class GroqLlmProvider implements LlmProvider {
         }
     }
 
-    private String callGroq(String userMessage) throws Exception {
+    private String callGroq(LlmRequest request) throws Exception {
         String url = properties.getBaseUrl() + "/chat/completions";
 
-        Map<String, Object> requestBody = Map.of(
-                "model", properties.getModel(),
-                "messages", List.of(
-                        Map.of(
-                                "role", "system",
-                                "content", PromptTemplate.SYSTEM_PROMPT
-                        ),
-                        Map.of(
-                                "role", "user",
-                                "content", userMessage
-                        )
-                ),
-                "temperature", properties.getTemperature(),
-                "max_tokens", properties.getMaxOutputTokens()
+        List<Map<String, String>> messages;
+
+        if (request.systemPrompt().isBlank()) {
+            messages = List.of(Map.of(
+                                    "role",
+                                    "user",
+                                    "content",
+                                    request.userPrompt()
+                            )
+            );
+        }
+        else {
+            messages = List.of(
+                            Map.of(
+                                    "role",
+                                    "system",
+                                    "content",
+                                    request.systemPrompt()
+                            ),
+                            Map.of(
+                                    "role",
+                                    "user",
+                                    "content",
+                                    request.userPrompt()
+                            )
+                    );
+        }
+
+        Map<String, Object> requestBody = new LinkedHashMap<>();
+
+        requestBody.put(
+                "model",
+                properties.getModel()
         );
 
-        String responseJson = restClient.post()
-                .uri(url)
-                .header("Authorization", "Bearer " + properties.getKey())
-                .header("Content-Type", "application/json")
-                .body(requestBody)
-                .retrieve()
-                .body(String.class);
+        requestBody.put(
+                "messages",
+                messages
+        );
+
+        requestBody.put(
+                "temperature",
+                request.temperature()
+        );
+
+        requestBody.put(
+                "top_p",
+                request.topP()
+        );
+
+        requestBody.put(
+                "max_tokens",
+                request.maxOutputTokens()
+        );
+
+        if (request.responseFormat() == LlmResponseFormat.JSON) {
+            requestBody.put(
+                    "response_format",
+                    Map.of(
+                            "type",
+                            "json_object"
+                    )
+            );
+        }
+
+        RestClient selectedRestClient = selectRestClient(request.timeoutProfile());
+
+        String responseJson =
+                selectedRestClient.post()
+                        .uri(url)
+                        .header(
+                                "Authorization",
+                                "Bearer "
+                                        + properties.getKey()
+                        )
+                        .header(
+                                "Content-Type",
+                                "application/json"
+                        )
+                        .body(requestBody)
+                        .retrieve()
+                        .body(String.class);
 
         return extractText(responseJson);
+    }
+
+    private RestClient createRestClient(Duration connectTimeout, Duration readTimeout) {
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(connectTimeout);
+        requestFactory.setReadTimeout(readTimeout);
+
+        return RestClient.builder()
+                .requestFactory(requestFactory)
+                .build();
+    }
+
+    private RestClient selectRestClient(LlmTimeoutProfile timeoutProfile) {
+        return timeoutProfile == LlmTimeoutProfile.FAST
+                ? fastRestClient
+                : standardRestClient;
     }
 
     private String extractText(String responseJson) throws Exception {
         JsonNode root = objectMapper.readTree(responseJson);
 
-        JsonNode contentNode = root
-                .path("choices")
-                .path(0)
-                .path("message")
-                .path("content");
+        JsonNode contentNode =
+                root.path("choices")
+                        .path(0)
+                        .path("message")
+                        .path("content");
 
         if (contentNode.isMissingNode() || contentNode.asText().isBlank()) {
-            log.warn("Groq response did not contain expected text content: {}", responseJson);
-
-            return """
-                    Groq вернул пустой ответ.
-                    
-                    Попробуй переформулировать вопрос.
-                    """;
+            throw new IllegalStateException("Groq response does not contain text");
         }
 
         return contentNode.asText();
@@ -216,6 +243,8 @@ public class GroqLlmProvider implements LlmProvider {
     }
 
     private int safeLength(String value) {
-        return value == null ? 0 : value.length();
+        return value == null
+                ? 0
+                : value.length();
     }
 }

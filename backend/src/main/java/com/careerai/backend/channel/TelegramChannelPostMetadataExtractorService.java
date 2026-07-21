@@ -1,6 +1,7 @@
 package com.careerai.backend.channel;
 
 import com.careerai.backend.ai.LlmProvider;
+import com.careerai.backend.ai.LlmRequest;
 import com.careerai.backend.ai.LlmResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,22 +31,22 @@ public class TelegramChannelPostMetadataExtractorService {
     private final TelegramChannelPostMetadataRepository metadataRepository;
     private final LlmProvider llmProvider;
     private final ObjectMapper objectMapper;
+    private final TelegramChannelPostMetadataRequestFactory requestFactory;
 
     public TelegramChannelPostMetadataExtractorService(
             TelegramChannelPostMetadataRepository metadataRepository,
             LlmProvider llmProvider,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            TelegramChannelPostMetadataRequestFactory requestFactory
     ) {
         this.metadataRepository = metadataRepository;
         this.llmProvider = llmProvider;
         this.objectMapper = objectMapper;
+        this.requestFactory = requestFactory;
     }
 
-    @Transactional
     public void extractAndSave(Long metadataId) {
-        TelegramChannelPostMetadata metadata = metadataRepository
-                .findById(metadataId)
-                .orElse(null);
+        TelegramChannelPostMetadata metadata = metadataRepository.findByIdWithPost(metadataId).orElse(null);
 
         if (metadata == null) {
             return;
@@ -58,9 +59,8 @@ public class TelegramChannelPostMetadataExtractorService {
             return;
         }
 
-        String prompt = buildExtractionPrompt(post.getText());
-
-        LlmResponse response = llmProvider.generateAnswer(prompt);
+        LlmRequest request = requestFactory.create(post.getText());
+        LlmResponse response = llmProvider.execute(request);
 
         if (response.failed()) {
             markAsFailed(
@@ -98,49 +98,6 @@ public class TelegramChannelPostMetadataExtractorService {
                     e
             );
         }
-    }
-
-    private String buildExtractionPrompt(String postText) {
-        return """
-                Ты внутренний extractor для Telegram-постов Центра карьеры AITU.
-
-                Твоя задача — НЕ отвечать пользователю, а разобрать пост и вернуть JSON.
-
-                Верни только JSON без Markdown, без ```json, без HTML и без пояснений.
-
-                Возможные postType:
-                - VACANCY — вакансия, работа, стажировка, позиция, internship/job
-                - PRACTICE — производственная практика, документы, договоры, сроки практики
-                - EVENT — мероприятие, мастер-класс, workshop, встреча, ярмарка
-                - DEADLINE — пост, где главный смысл это срок или дедлайн
-                - ANNOUNCEMENT — общее объявление
-                - OTHER — если тип непонятен
-
-                Правила:
-                - Не выдумывай данные, которых нет в посте.
-                - Если поля нет в посте, ставь null.
-                - technologies верни строкой через запятую, например "Java, Spring Boot, PostgreSQL".
-                - relevantForPractice = true, если пост связан с производственной практикой, документами практики или сроками практики.
-                - summary сделай коротким: 1-2 предложения.
-
-                Формат:
-                {
-                  "postType": "VACANCY",
-                  "title": "Java Intern",
-                  "company": "ООО Example",
-                  "technologies": "Java, Spring Boot",
-                  "levelText": "Intern",
-                  "formatText": "Удалёнка",
-                  "deadlineText": "30 июня",
-                  "practiceStartText": null,
-                  "practiceEndText": null,
-                  "summary": "Краткое описание поста.",
-                  "relevantForPractice": false
-                }
-
-                Текст Telegram-поста:
-                "%s"
-                """.formatted(postText);
     }
 
     private void applyExtractionResult(

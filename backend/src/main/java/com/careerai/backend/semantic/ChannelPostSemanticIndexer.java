@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
@@ -71,7 +72,8 @@ public class ChannelPostSemanticIndexer {
      * Индексирует новый или отредактированный пост
      * только после успешного commit основной транзакции.
      */
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Async("channelPostIndexingExecutor")
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void handleSavedPost(TelegramChannelPostSavedEvent event) {
         if (!properties.isEnabled()) {
             return;

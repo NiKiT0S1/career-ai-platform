@@ -6,11 +6,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 
 /**
- * Основная точка входа для генерации AI-ответов.
- *
- * Если активный провайдер — Gemini, backend сначала пробует Gemini.
- * Если Gemini не смогла ответить из-за лимитов, 503, timeout или сетевой ошибки,
- * backend автоматически пробует fallback через Groq.
+ * Выбирает AI-провайдера и выполняет fallback.
  */
 
 @Primary
@@ -23,7 +19,7 @@ public class ActiveLlmProvider implements LlmProvider {
     private final GeminiLlmProvider geminiLlmProvider;
     private final GroqLlmProvider groqLlmProvider;
 
-    public ActiveLlmProvider (
+    public ActiveLlmProvider(
             LlmProperties llmProperties,
             GeminiLlmProvider geminiLlmProvider,
             GroqLlmProvider groqLlmProvider
@@ -34,64 +30,77 @@ public class ActiveLlmProvider implements LlmProvider {
     }
 
     @Override
-    public LlmResponse generateAnswer(String userMessage) {
+    public LlmResponse execute(LlmRequest request) {
+        if (request.providerStrategy() == LlmProviderStrategy.GROQ_FIRST) {
+            return executeGroqFirst(request);
+        }
+
         return switch (llmProperties.getProvider()) {
-            case GEMINI -> generateWithGeminiAndGroqFallback(userMessage);
-            case GROQ -> generateWithGroqOnly(userMessage);
+            case GEMINI -> executeGeminiFirst(request);
+            case GROQ -> executeGroqOnly(request);
         };
     }
 
-    private LlmResponse generateWithGeminiAndGroqFallback(String userMessage) {
-        log.info("Active LLM provider: Gemini");
+    private LlmResponse executeGeminiFirst(LlmRequest request) {
+        log.info("Active LLM provider selected. provider=Gemini, taskType={}", request.taskType());
 
-        LlmResponse geminiResponse = geminiLlmProvider.generateAnswer(userMessage);
+        LlmResponse geminiResponse = geminiLlmProvider.execute(request);
 
         if (geminiResponse.success()) {
             return geminiResponse;
         }
 
-        log.warn(
-                "Primary Gemini provider failed. Trying Groq fallback. Gemini model: {}. Error type: {}. Elapsed: {} ms",
-                geminiResponse.model(),
-                geminiResponse.errorType(),
-                geminiResponse.elapsedMillis()
-        );
+        log.warn("Primary Gemini provider failed. Trying Groq fallback. taskType={}, model={}, errorType={}, elapsedMs={}", request.taskType(), geminiResponse.model(), geminiResponse.errorType(), geminiResponse.elapsedMillis());
 
-        LlmResponse groqResponse = groqLlmProvider.generateAnswer(userMessage);
+        LlmResponse groqResponse = groqLlmProvider.execute(request);
 
         if (groqResponse.success()) {
-            log.info(
-                    "Groq fallback succeeded. Model: {}. Elapsed: {} ms",
-                    groqResponse.model(),
-                    groqResponse.elapsedMillis()
-            );
-
+            log.info("Groq fallback succeeded. taskType={}, model={}, elapsedMs={}", request.taskType(), groqResponse.model(), groqResponse.elapsedMillis());
             return groqResponse;
         }
 
-        log.error(
-                "Both LLM providers failed. Gemini error: {}. Groq error: {}",
-                geminiResponse.errorType(),
-                groqResponse.errorType()
-        );
-
-        return LlmResponse.failure(
-                """
-                Сейчас AI-ассистент временно недоступен.
-                
-                Основная модель и резервная модель не смогли обработать запрос.
-                Попробуй повторить вопрос чуть позже.
-                """,
-                "ActiveLlmProvider",
-                "Gemini -> Groq",
-                groqResponse.errorType(),
-                geminiResponse.elapsedMillis() + groqResponse.elapsedMillis()
-        );
+        return bothProvidersFailed(request, geminiResponse, groqResponse);
     }
 
-    private LlmResponse generateWithGroqOnly(String userMessage) {
-        log.info("Active LLM provider: Groq");
+    private LlmResponse executeGroqFirst(LlmRequest request) {
+        log.info("Fast LLM provider selected. provider=Groq, taskType={}", request.taskType());
 
-        return groqLlmProvider.generateAnswer(userMessage);
+        LlmResponse groqResponse = groqLlmProvider.execute(request);
+
+        if (groqResponse.success()) {
+            return groqResponse;
+        }
+
+        log.warn("Primary Groq provider failed. Trying Gemini fallback. taskType={}, model={}, errorType={}, elapsedMs={}", request.taskType(), groqResponse.model(), groqResponse.errorType(), groqResponse.elapsedMillis());
+
+        LlmResponse geminiResponse = geminiLlmProvider.execute(request);
+
+        if (geminiResponse.success()) {
+            log.info("Gemini fallback succeeded. taskType={}, model={}, elapsedMs={}", request.taskType(), geminiResponse.model(), geminiResponse.elapsedMillis());
+            return geminiResponse;
+        }
+
+        return bothProvidersFailed(request, groqResponse, geminiResponse);
+    }
+
+    private LlmResponse executeGroqOnly(LlmRequest request) {
+        log.info("Active LLM provider selected. provider=Groq, taskType={}", request.taskType());
+        return groqLlmProvider.execute(request);
+    }
+
+    private LlmResponse bothProvidersFailed(
+            LlmRequest request,
+            LlmResponse firstResponse,
+            LlmResponse secondResponse
+    ) {
+        log.error("Both LLM providers failed. taskType={}, firstError={}, secondError={}", request.taskType(), firstResponse.errorType(), secondResponse.errorType());
+
+        return LlmResponse.failure(
+                "Основная и резервная AI-модели не смогли выполнить задачу",
+                "ActiveLlmProvider",
+                firstResponse.provider() + " -> " + secondResponse.provider(),
+                secondResponse.errorType(),
+                firstResponse.elapsedMillis() + secondResponse.elapsedMillis()
+        );
     }
 }

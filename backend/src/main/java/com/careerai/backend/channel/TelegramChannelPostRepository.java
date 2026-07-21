@@ -62,4 +62,21 @@ public interface TelegramChannelPostRepository extends JpaRepository<TelegramCha
     List<TelegramChannelPost> findLatestSearchableTextPosts(
             Pageable pageable
     );
+
+    /**
+     * Находит reply-посты, для которых
+     * ещё не создана ни одна relation.
+     */
+    @Query("""
+        SELECT post.id
+        FROM TelegramChannelPost post
+        WHERE post.replyToTelegramMessageId IS NOT NULL
+          AND NOT EXISTS (
+              SELECT relation.id
+              FROM TelegramChannelPostRelation relation
+              WHERE relation.sourcePost.id = post.id
+          )
+        ORDER BY post.createdAt ASC
+        """)
+    List<Long> findReplyPostIdsWithoutRelation(Pageable pageable);
 }

@@ -39,6 +39,15 @@ public class TelegramChannelPost {
     @Column(name = "telegram_message_id", nullable = false)
     private Long telegramMessageId;
 
+    /**
+     * Telegram message_id публикации,
+     * на которую отвечает этот пост.
+     *
+     * Значение относится к тому же Telegram-чату.
+     */
+    @Column(name = "reply_to_telegram_message_id")
+    private Long replyToTelegramMessageId;
+
     @Column(name = "channel_title")
     private String channelTitle;
 

@@ -665,9 +665,21 @@ public class TelegramChannelPostAnswerService {
                         .append(relation.getRelationType())
                         .append("\n");
 
-                prompt.append("Точная область изменения: ")
-                        .append(relation.getReason())
-                        .append("\n");
+                String relationReason =
+                        relation.getReason();
+
+                if (relationReason == null
+                        || relationReason.isBlank()) {
+                    prompt.append(
+                            "Точная область изменения ещё "
+                                    + "не классифицирована.\n"
+                    );
+                }
+                else {
+                    prompt.append("Точная область изменения: ")
+                            .append(relationReason)
+                            .append("\n");
+                }
 
                 appendRelationApplicationRule(
                         prompt,
@@ -765,7 +777,8 @@ public class TelegramChannelPostAnswerService {
     }
 
     /**
-     * Объясняет LLM, как применять конкретный тип связи.
+     * Объясняет LLM, как применять
+     * подтверждённую связь постов.
      */
     private void appendRelationApplicationRule(
             StringBuilder prompt,
@@ -775,31 +788,41 @@ public class TelegramChannelPostAnswerService {
                 relation.getRelationType();
 
         if (relationType == null) {
-            prompt.append(
-                    "Примени изменение только к исходной "
-                            + "публикации этой цепочки.\n"
-            );
-            return;
+            relationType =
+                    TelegramChannelPostRelationType.UNCLASSIFIED;
         }
 
         switch (relationType) {
+            case UNCLASSIFIED -> prompt.append(
+                    "Структурная связь между публикациями подтверждена, "
+                            + "но точный тип изменения ещё не классифицирован. "
+                            + "Сопоставь тексты осторожно и не придумывай "
+                            + "отсутствующие изменения.\n"
+            );
+
             case UPDATE -> prompt.append(
                     "Это дополнение. Добавь новые сведения "
-                            + "к исходному объявлению, не создавая "
-                            + "отдельное мероприятие.\n"
+                            + "к исходной публикации, не создавая "
+                            + "отдельное объявление.\n"
             );
 
             case CORRECTION -> prompt.append(
-                    "Это исправление. Замени соответствующие "
-                            + "старые сведения новыми, остальные "
-                            + "условия сохрани.\n"
+                    "Это исправление. Замени только соответствующие "
+                            + "старые сведения новыми. Остальную "
+                            + "подтверждённую информацию сохрани.\n"
             );
 
             case CANCELLATION -> prompt.append(
-                    "Это точечная отмена. Отмени только то, "
-                            + "что прямо указано в области изменения. "
-                            + "Не отменяй другие подарки, бонусы, "
-                            + "условия или само мероприятие.\n"
+                    "Это отмена. Отмени только то, что прямо "
+                            + "подтверждено более новой публикацией. "
+                            + "Не расширяй область отмены.\n"
+            );
+
+            case MIXED -> prompt.append(
+                    "Публикация содержит несколько изменений "
+                            + "разных типов. Примени каждое изменение "
+                            + "отдельно и только в пределах информации, "
+                            + "подтверждённой текстами этой цепочки.\n"
             );
         }
 

@@ -7,12 +7,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.OffsetDateTime;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Управляет явными связями между
- * исходными Telegram-постами и уточнениями.
+ * Управляет ручными связями Telegram-постов.
  */
+
 @Service
 public class TelegramChannelPostRelationService {
 
@@ -32,10 +33,6 @@ public class TelegramChannelPostRelationService {
         this.clock = clock;
     }
 
-    /**
-     * Создаёт связь между новым постом
-     * и исходной публикацией.
-     */
     @Transactional
     public TelegramChannelPostRelationResult link(
             long sourcePostId,
@@ -48,53 +45,66 @@ public class TelegramChannelPostRelationService {
                 targetPostId
         );
 
-        TelegramChannelPostRelationType safeRelationType =
-                requireRelationType(relationType);
+        TelegramChannelPostRelationType safeType = requireConfirmedRelationType(relationType);
 
-        String normalizedReason =
-                normalizeReason(reason);
+        String normalizedReason = normalizeReason(reason);
 
-        Optional<TelegramChannelPostRelation> existingRelation =
-                relationRepository
-                        .findBySourcePostIdAndTargetPostIdAndRelationType(
+        Optional<TelegramChannelPostRelation> existingOptional = relationRepository
+                        .findBySourcePostIdAndTargetPostId(
                                 sourcePostId,
-                                targetPostId,
-                                safeRelationType
+                                targetPostId
                         );
 
-        if (existingRelation.isPresent()) {
-            TelegramChannelPostRelation relation =
-                    existingRelation.get();
+        if (existingOptional.isPresent()) {
+            TelegramChannelPostRelation relation = existingOptional.get();
 
-            log.info("Telegram channel post relation creation skipped: relation already exists. relationId={}, sourcePostId={}, targetPostId={}, relationType={}", relation.getId(), sourcePostId, targetPostId, safeRelationType);
+            boolean changed = relation.getRelationType() != safeType || !Objects.equals(relation.getReason(), normalizedReason)
+                            || relation.getRelationOrigin()
+                            != TelegramChannelPostRelationOrigin.MANUAL
+                            || relation.getClassificationStatus()
+                            != TelegramChannelPostRelationClassificationStatus.NOT_REQUIRED;
+
+            if (changed) {
+                relation.setRelationType(safeType);
+                relation.setReason(normalizedReason);
+                relation.setRelationOrigin(TelegramChannelPostRelationOrigin.MANUAL);
+
+                clearAutomaticClassification(relation);
+
+                relation.setUpdatedAt(OffsetDateTime.now(clock));
+
+                relationRepository.save(relation);
+            }
+
+            log.info("Manual Telegram channel post relation updated or retained. relationId={}, sourcePostId={}, targetPostId={}, relationType={}, changed={}", relation.getId(), sourcePostId, targetPostId, safeType, changed);
 
             return toResult(
                     relation,
                     true,
-                    false
+                    changed
             );
         }
 
-        TelegramChannelPost sourcePost =
-                findPost(sourcePostId);
+        TelegramChannelPost sourcePost = findPost(sourcePostId);
 
-        TelegramChannelPost targetPost =
-                findPost(targetPostId);
+        TelegramChannelPost targetPost = findPost(targetPostId);
 
-        TelegramChannelPostRelation relation =
-                new TelegramChannelPostRelation();
+        OffsetDateTime now = OffsetDateTime.now(clock);
+
+        TelegramChannelPostRelation relation = new TelegramChannelPostRelation();
 
         relation.setSourcePost(sourcePost);
         relation.setTargetPost(targetPost);
-        relation.setRelationType(safeRelationType);
+        relation.setRelationType(safeType);
         relation.setReason(normalizedReason);
-        relation.setCreatedAt(
-                OffsetDateTime.now(clock)
-        );
+        relation.setRelationOrigin(TelegramChannelPostRelationOrigin.MANUAL);
+        relation.setClassificationStatus(TelegramChannelPostRelationClassificationStatus.NOT_REQUIRED);
+        relation.setCreatedAt(now);
+        relation.setUpdatedAt(now);
 
         relationRepository.save(relation);
 
-        log.info("Telegram channel post relation created. relationId={}, sourcePostId={}, targetPostId={}, relationType={}, reason={}", relation.getId(), sourcePostId, targetPostId, safeRelationType, normalizedReason);
+        log.info("Manual Telegram channel post relation created. relationId={}, sourcePostId={}, targetPostId={}, relationType={}, reason={}", relation.getId(), sourcePostId, targetPostId, safeType, normalizedReason);
 
         return toResult(
                 relation,
@@ -103,34 +113,25 @@ public class TelegramChannelPostRelationService {
         );
     }
 
-    /**
-     * Удаляет существующую связь.
-     */
     @Transactional
     public TelegramChannelPostRelationResult unlink(
             long sourcePostId,
             long targetPostId,
             TelegramChannelPostRelationType relationType
     ) {
-        TelegramChannelPostRelationType safeRelationType =
-                requireRelationType(relationType);
-
-        Optional<TelegramChannelPostRelation> existingRelation =
-                relationRepository
-                        .findBySourcePostIdAndTargetPostIdAndRelationType(
+        Optional<TelegramChannelPostRelation> existingOptional = relationRepository.findBySourcePostIdAndTargetPostId(
                                 sourcePostId,
-                                targetPostId,
-                                safeRelationType
+                                targetPostId
                         );
 
-        if (existingRelation.isEmpty()) {
-            log.info("Telegram channel post relation deletion skipped: relation was not found. sourcePostId={}, targetPostId={}, relationType={}", sourcePostId, targetPostId, safeRelationType);
+        if (existingOptional.isEmpty() || existingOptional.get().getRelationType() != relationType) {
+            log.info("Telegram channel post relation deletion skipped: relation was not found. sourcePostId={}, targetPostId={}, relationType={}", sourcePostId, targetPostId, relationType);
 
             return new TelegramChannelPostRelationResult(
                     null,
                     sourcePostId,
                     targetPostId,
-                    safeRelationType,
+                    relationType,
                     false,
                     false,
                     null,
@@ -138,8 +139,7 @@ public class TelegramChannelPostRelationService {
             );
         }
 
-        TelegramChannelPostRelation relation =
-                existingRelation.get();
+        TelegramChannelPostRelation relation = existingOptional.get();
 
         TelegramChannelPostRelationResult result =
                 toResult(
@@ -150,18 +150,32 @@ public class TelegramChannelPostRelationService {
 
         relationRepository.delete(relation);
 
-        log.info("Telegram channel post relation deleted. relationId={}, sourcePostId={}, targetPostId={}, relationType={}", relation.getId(), sourcePostId, targetPostId, safeRelationType);
+        log.info("Telegram channel post relation deleted. relationId={}, sourcePostId={}, targetPostId={}, relationType={}", relation.getId(), sourcePostId, targetPostId, relationType);
 
         return result;
+    }
+
+    private void clearAutomaticClassification(TelegramChannelPostRelation relation) {
+        relation.setClassificationStatus(TelegramChannelPostRelationClassificationStatus.NOT_REQUIRED);
+        relation.setClassificationConfidence(null);
+        relation.setProposedRelationType(null);
+        relation.setProposedReason(null);
+        relation.setClassificationProvider(null);
+        relation.setClassificationModel(null);
+        relation.setClassifierVersion(null);
+        relation.setClassificationRawResponse(null);
+        relation.setClassificationError(null);
+        relation.setClassifiedAt(null);
+        relation.setClassificationAttemptCount(0);
+        relation.setClassificationNextAttemptAt(null);
+        relation.setProcessingStartedAt(null);
+        relation.setClassificationInputHash(null);
     }
 
     private TelegramChannelPost findPost(long postId) {
         return postRepository.findById(postId)
                 .orElseThrow(
-                        () ->
-                                new TelegramChannelPostNotFoundException(
-                                        postId
-                                )
+                        () -> new TelegramChannelPostNotFoundException(postId)
                 );
     }
 
@@ -170,29 +184,21 @@ public class TelegramChannelPostRelationService {
             long targetPostId
     ) {
         if (sourcePostId == targetPostId) {
-            throw new IllegalArgumentException(
-                    "Telegram-пост нельзя связать с самим собой"
-            );
+            throw new IllegalArgumentException("Telegram-пост нельзя связать с самим собой");
         }
     }
 
-    private TelegramChannelPostRelationType requireRelationType(
-            TelegramChannelPostRelationType relationType
-    ) {
-        if (relationType == null) {
-            throw new IllegalArgumentException(
-                    "Необходимо указать тип связи постов"
-            );
+    private TelegramChannelPostRelationType requireConfirmedRelationType(TelegramChannelPostRelationType type) {
+        if (type == null || type == TelegramChannelPostRelationType.UNCLASSIFIED) {
+            throw new IllegalArgumentException("Для ручной связи необходимо указать подтверждённый тип");
         }
 
-        return relationType;
+        return type;
     }
 
     private String normalizeReason(String reason) {
         if (reason == null || reason.isBlank()) {
-            throw new IllegalArgumentException(
-                    "Необходимо указать причину связи постов"
-            );
+            throw new IllegalArgumentException("Необходимо указать причину связи постов");
         }
 
         return reason.strip();

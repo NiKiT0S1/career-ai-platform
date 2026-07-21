@@ -25,15 +25,18 @@ public class TelegramChannelPostService {
 
     private final TelegramChannelPostRepository repository;
     private final TelegramChannelPostMetadataService metadataService;
+    private final TelegramReplyReferenceExtractor replyReferenceExtractor;
     private final ApplicationEventPublisher eventPublisher;
 
     public TelegramChannelPostService(
             TelegramChannelPostRepository repository,
             TelegramChannelPostMetadataService metadataService,
+            TelegramReplyReferenceExtractor replyReferenceExtractor,
             ApplicationEventPublisher eventPublisher
     ) {
         this.repository = repository;
         this.metadataService = metadataService;
+        this.replyReferenceExtractor = replyReferenceExtractor;
         this.eventPublisher = eventPublisher;
     }
 
@@ -50,6 +53,12 @@ public class TelegramChannelPostService {
 
         String text = extractText(message);
 
+        /*
+         * Если публикация является ответом на другой пост,
+         * сохраняем Telegram message_id исходной публикации.
+         */
+        Long replyToTelegramMessageId = replyReferenceExtractor.extractReplyToMessageId(message);
+
         TelegramChannelPost post = repository
                 .findByTelegramChatIdAndTelegramMessageId(telegramChatId, telegramMessageId)
                 .orElseGet(TelegramChannelPost::new);
@@ -61,6 +70,17 @@ public class TelegramChannelPostService {
         post.setText(text);
         post.setRawUpdateJson(rawUpdateJson);
         post.setPostedAt(extractTelegramDate(message, "date"));
+
+        /*
+         * Reply-связь Telegram является неизменяемой.
+         *
+         * При редактировании Telegram иногда может не прислать
+         * полный объект reply_to_message, поэтому уже сохранённое
+         * значение нельзя случайно стереть.
+         */
+        if (post.getId() == null || replyToTelegramMessageId != null) {
+            post.setReplyToTelegramMessageId(replyToTelegramMessageId);
+        }
 
         if (edited) {
             post.setEditedAt(extractTelegramDate(message, "edit_date"));
@@ -75,9 +95,11 @@ public class TelegramChannelPostService {
         );
 
         log.info(
-                "Telegram channel post saved. chatId={}, messageId={}, edited={}, textLength={}",
+                "Telegram channel post saved. postId={}, chatId={}, messageId={}, replyToMessageId={}, edited={}, textLength={}",
+                savedPost.getId(),
                 telegramChatId,
                 telegramMessageId,
+                savedPost.getReplyToTelegramMessageId(),
                 edited,
                 text == null ? 0 : text.length()
         );

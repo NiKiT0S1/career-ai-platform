@@ -32,17 +32,20 @@ public class TelegramChannelPostMetadataExtractorService {
     private final LlmProvider llmProvider;
     private final ObjectMapper objectMapper;
     private final TelegramChannelPostMetadataRequestFactory requestFactory;
+    private final TelegramChannelPostFreshnessService freshnessService;
 
     public TelegramChannelPostMetadataExtractorService(
             TelegramChannelPostMetadataRepository metadataRepository,
             LlmProvider llmProvider,
             ObjectMapper objectMapper,
-            TelegramChannelPostMetadataRequestFactory requestFactory
+            TelegramChannelPostMetadataRequestFactory requestFactory,
+            TelegramChannelPostFreshnessService freshnessService
     ) {
         this.metadataRepository = metadataRepository;
         this.llmProvider = llmProvider;
         this.objectMapper = objectMapper;
         this.requestFactory = requestFactory;
+        this.freshnessService = freshnessService;
     }
 
     public void extractAndSave(Long metadataId) {
@@ -79,6 +82,8 @@ public class TelegramChannelPostMetadataExtractorService {
             metadata.setExtractedAt(OffsetDateTime.now());
 
             metadataRepository.save(metadata);
+
+            refreshFreshnessSafely(post.getId());
 
             log.info(
                     "Telegram channel post metadata extracted. metadataId={}, postId={}, postType={}, title={}",
@@ -234,6 +239,8 @@ public class TelegramChannelPostMetadataExtractorService {
         metadata.setExtractedAt(OffsetDateTime.now());
 
         metadataRepository.save(metadata);
+
+        refreshFreshnessSafely(resolvePostId(metadata));
     }
 
     private void markAsFailed(TelegramChannelPostMetadata metadata, String errorText) {
@@ -243,10 +250,33 @@ public class TelegramChannelPostMetadataExtractorService {
 
         metadataRepository.save(metadata);
 
+        refreshFreshnessSafely(resolvePostId(metadata));
+
         log.warn(
                 "Telegram channel post metadata extraction failed. metadataId={}, error={}",
                 metadata.getId(),
                 errorText
         );
+    }
+
+    private void refreshFreshnessSafely(Long postId) {
+        if (postId == null) {
+            return;
+        }
+
+        try {
+            freshnessService.recalculateOne(postId);
+        }
+        catch (Exception exception) {
+            log.error("Immediate channel post freshness recalculation failed. postId={}", postId, exception);
+        }
+    }
+
+    private Long resolvePostId(TelegramChannelPostMetadata metadata) {
+        if (metadata == null || metadata.getPost() == null) {
+            return null;
+        }
+
+        return metadata.getPost().getId();
     }
 }

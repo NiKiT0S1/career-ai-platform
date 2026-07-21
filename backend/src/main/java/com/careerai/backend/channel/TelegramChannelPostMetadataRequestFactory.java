@@ -24,7 +24,7 @@ public class TelegramChannelPostMetadataRequestFactory {
               "technologies": "технологии через запятую или null",
               "levelText": "уровень или null",
               "formatText": "формат работы или участия либо null",
-              "deadlineText": "срок подачи или null",
+              "deadlineText": "точная цитата срока из исходного текста или null",
               "practiceStartText": "начало практики или null",
               "practiceEndText": "окончание практики или null",
               "summary": "краткое описание в 1-2 предложениях",
@@ -39,6 +39,14 @@ public class TelegramChannelPostMetadataRequestFactory {
             OTHER — тип нельзя надёжно определить.
 
             Если значения нет в тексте, используй null.
+            
+            Значения deadlineText, practiceStartText и practiceEndText копируй из исходного текста дословно.
+            
+            Обязательно сохраняй слова и конструкции, определяющие границу срока:
+            "до", "по", "включительно", "до конца", "before", "through", "by", "дейін" и аналогичные.
+            
+            Не заменяй и не переформулируй даты. Например, если указана дата "до 21 июля", то не надо переформулировывать ее, например, на "21 июля".
+            
             Не добавляй Markdown или пояснения вокруг JSON.
             """;
 

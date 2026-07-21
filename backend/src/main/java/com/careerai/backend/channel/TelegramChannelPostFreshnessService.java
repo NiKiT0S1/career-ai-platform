@@ -85,26 +85,7 @@ public class TelegramChannelPostFreshnessService {
             TelegramChannelPostFreshnessEvaluation evaluation =
                     evaluator.evaluate(post, metadata);
 
-            boolean changed = hasChanged(
-                    post,
-                    evaluation
-            );
-
-            post.setFreshnessStatus(
-                    evaluation.status()
-            );
-
-            post.setExpiresAt(
-                    evaluation.expiresAt()
-            );
-
-            post.setFreshnessReason(
-                    evaluation.reason()
-            );
-
-            post.setFreshnessCheckedAt(
-                    checkedAt
-            );
+            boolean changed = applyEvaluation(post, evaluation, checkedAt);
 
             if (changed) {
                 log.info(
@@ -152,6 +133,39 @@ public class TelegramChannelPostFreshnessService {
         return summary;
     }
 
+    /**
+     * Пересчитывает freshness одной публикации.
+     *
+     * Используется сразу после успешного или неуспешного
+     * извлечения новой metadata.
+     */
+    @Transactional
+    public TelegramChannelPostFreshnessEvaluation recalculateOne(long postId) {
+        TelegramChannelPost post = postRepository.findById(postId)
+                .orElseThrow(() -> new TelegramChannelPostNotFoundException(postId));
+
+        TelegramChannelPostMetadata metadata = metadataRepository.findByPostId(postId)
+                .orElse(null);
+
+        TelegramChannelPostFreshnessEvaluation evaluation = evaluator.evaluate(post, metadata);
+        OffsetDateTime checkedAt = OffsetDateTime.now(clock);
+        boolean changed = applyEvaluation(post, evaluation, checkedAt);
+
+        postRepository.save(post);
+
+        log.info(
+                "Channel post freshness recalculated. postId={}, telegramMessageId={}, changed={}, status={}, expiresAt={}, reason={}",
+                post.getId(),
+                post.getTelegramMessageId(),
+                changed,
+                evaluation.status(),
+                evaluation.expiresAt(),
+                evaluation.reason()
+        );
+
+        return evaluation;
+    }
+
     private boolean hasChanged(
             TelegramChannelPost post,
             TelegramChannelPostFreshnessEvaluation evaluation
@@ -181,5 +195,20 @@ public class TelegramChannelPostFreshnessService {
         }
 
         return first.isEqual(second);
+    }
+
+    private boolean applyEvaluation(
+            TelegramChannelPost post,
+            TelegramChannelPostFreshnessEvaluation evaluation,
+            OffsetDateTime checkedAt
+    ) {
+        boolean changed = hasChanged(post, evaluation);
+
+        post.setFreshnessStatus(evaluation.status());
+        post.setExpiresAt(evaluation.expiresAt());
+        post.setFreshnessReason(evaluation.reason());
+        post.setFreshnessCheckedAt(checkedAt);
+
+        return changed;
     }
 }

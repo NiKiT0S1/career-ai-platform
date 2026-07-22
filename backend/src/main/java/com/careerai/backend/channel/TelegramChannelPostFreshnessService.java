@@ -166,6 +166,31 @@ public class TelegramChannelPostFreshnessService {
         return evaluation;
     }
 
+    /**
+     * Быстро помечает публикации с наступившим expiresAt
+     * как истёкшие без полного пересчёта metadata.
+     */
+    @Transactional
+    public int expireDuePosts() {
+        OffsetDateTime now = OffsetDateTime.now(clock);
+
+        int expiredCount = postRepository.expireDuePosts(
+                List.of(
+                        TelegramChannelPostFreshnessStatus.ACTIVE,
+                        TelegramChannelPostFreshnessStatus.UNKNOWN
+                ),
+                TelegramChannelPostFreshnessStatus.EXPIRED,
+                now,
+                "Срок публикации истёк: наступил сохранённый момент expiresAt"
+        );
+
+        if (expiredCount > 0) {
+            log.info("Due channel posts marked as expired. count={}, checkedAt={}", expiredCount, now);
+        }
+
+        return expiredCount;
+    }
+
     private boolean hasChanged(
             TelegramChannelPost post,
             TelegramChannelPostFreshnessEvaluation evaluation

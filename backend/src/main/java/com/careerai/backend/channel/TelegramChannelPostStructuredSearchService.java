@@ -19,8 +19,11 @@ public class TelegramChannelPostStructuredSearchService {
 
     private final TelegramChannelPostMetadataRepository metadataRepository;
 
-    public TelegramChannelPostStructuredSearchService(TelegramChannelPostMetadataRepository metadataRepository) {
+    private final TelegramChannelPostSearchEligibility searchEligibility;
+
+    public TelegramChannelPostStructuredSearchService(TelegramChannelPostMetadataRepository metadataRepository, TelegramChannelPostSearchEligibility searchEligibility) {
         this.metadataRepository = metadataRepository;
+        this.searchEligibility = searchEligibility;
     }
 
     /**
@@ -198,10 +201,12 @@ public class TelegramChannelPostStructuredSearchService {
         );
     }
 
-    private List<TelegramChannelPost> toPosts(List<TelegramChannelPostMetadata> metadataList) {
+    private List<TelegramChannelPost> toPosts(
+            List<TelegramChannelPostMetadata> metadataList
+    ) {
         return metadataList.stream()
                 .map(TelegramChannelPostMetadata::getPost)
-                .filter(Objects::nonNull)
+                .filter(searchEligibility::isSearchable)
                 .toList();
     }
 

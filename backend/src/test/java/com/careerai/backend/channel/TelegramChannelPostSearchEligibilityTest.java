@@ -1,77 +1,74 @@
 package com.careerai.backend.channel;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import java.time.Clock;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TelegramChannelPostSearchEligibilityTest {
 
-    @Test
-    void allowsActivePost() {
-        TelegramChannelPost post =
-                createPost(
-                        TelegramChannelPostFreshnessStatus.ACTIVE,
-                        false
-                );
+    private TelegramChannelPostSearchEligibility eligibility;
+    private TelegramChannelPost post;
 
-        assertTrue(post.isSearchable());
+    @BeforeEach
+    void setUp() {
+        Clock clock = Clock.fixed(
+                Instant.parse("2026-07-22T04:12:00Z"),
+                ZoneId.of("Asia/Almaty")
+        );
+
+        eligibility = new TelegramChannelPostSearchEligibility(clock);
+
+        post = new TelegramChannelPost();
+        post.setFreshnessStatus(TelegramChannelPostFreshnessStatus.ACTIVE);
     }
 
     @Test
-    void allowsUnknownPost() {
-        TelegramChannelPost post =
-                createPost(
-                        TelegramChannelPostFreshnessStatus.UNKNOWN,
-                        false
-                );
+    void allowsActivePostWithFutureExpiration() {
+        post.setExpiresAt(OffsetDateTime.parse("2026-07-23T00:00:00+05:00"));
 
-        assertTrue(post.isSearchable());
+        assertTrue(eligibility.isSearchable(post));
     }
 
     @Test
-    void rejectsExpiredPost() {
-        TelegramChannelPost post =
-                createPost(
-                        TelegramChannelPostFreshnessStatus.EXPIRED,
-                        false
-                );
+    void rejectsActivePostWhoseExpirationAlreadyPassed() {
+        post.setExpiresAt(OffsetDateTime.parse("2026-07-22T00:00:00+05:00"));
 
-        assertFalse(post.isSearchable());
+        assertFalse(eligibility.isSearchable(post));
     }
 
     @Test
-    void rejectsInvalidPost() {
-        TelegramChannelPost post =
-                createPost(
-                        TelegramChannelPostFreshnessStatus.INVALID,
-                        false
-                );
+    void rejectsPostExactlyAtExpirationMoment() {
+        post.setExpiresAt(OffsetDateTime.parse("2026-07-22T09:12:00+05:00"));
 
-        assertFalse(post.isSearchable());
+        assertFalse(eligibility.isSearchable(post));
     }
 
     @Test
-    void rejectsArchivedActivePost() {
-        TelegramChannelPost post =
-                createPost(
-                        TelegramChannelPostFreshnessStatus.ACTIVE,
-                        true
-                );
+    void allowsUnknownPostWithoutExpiration() {
+        post.setFreshnessStatus(TelegramChannelPostFreshnessStatus.UNKNOWN);
+        post.setExpiresAt(null);
 
-        assertFalse(post.isSearchable());
+        assertTrue(eligibility.isSearchable(post));
     }
 
-    private TelegramChannelPost createPost(
-            TelegramChannelPostFreshnessStatus status,
-            boolean archived
-    ) {
-        TelegramChannelPost post =
-                new TelegramChannelPost();
+    @Test
+    void rejectsArchivedPost() {
+        post.setArchived(true);
 
-        post.setFreshnessStatus(status);
-        post.setArchived(archived);
+        assertFalse(eligibility.isSearchable(post));
+    }
 
-        return post;
+    @Test
+    void rejectsExpiredStatus() {
+        post.setFreshnessStatus(TelegramChannelPostFreshnessStatus.EXPIRED);
+
+        assertFalse(eligibility.isSearchable(post));
     }
 }

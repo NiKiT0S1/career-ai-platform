@@ -123,15 +123,27 @@ public class TelegramChannelPost {
 
     /**
      * Определяет, разрешено ли использовать публикацию
-     * в обычных ответах бота.
+     * в обычных ответах бота на указанный момент времени.
      *
-     * Посты без определённой даты остаются доступными,
-     * поскольку среди них могут быть важные объявления,
-     * исправления и отмены.
+     * Проверка expiresAt защищает поиск даже тогда,
+     * когда scheduler ещё не обновил freshnessStatus.
      */
-    public boolean isSearchable() {
-        return !archived &&
-                (freshnessStatus == TelegramChannelPostFreshnessStatus.ACTIVE || freshnessStatus == TelegramChannelPostFreshnessStatus.UNKNOWN);
+    public boolean isSearchable(OffsetDateTime now) {
+        Objects.requireNonNull(now, "Текущее время не может быть null");
+
+        if (archived) {
+            return false;
+        }
+
+        boolean allowedStatus =
+                freshnessStatus == TelegramChannelPostFreshnessStatus.ACTIVE
+                        || freshnessStatus == TelegramChannelPostFreshnessStatus.UNKNOWN;
+
+        if (!allowedStatus) {
+            return false;
+        }
+
+        return expiresAt == null || now.isBefore(expiresAt);
     }
 
     /**

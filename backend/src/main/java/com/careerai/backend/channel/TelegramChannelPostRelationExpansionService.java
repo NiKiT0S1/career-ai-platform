@@ -30,10 +30,14 @@ public class TelegramChannelPostRelationExpansionService {
 
     private final TelegramChannelPostRelationRepository relationRepository;
 
+    private final TelegramChannelPostSearchEligibility searchEligibility;
+
     public TelegramChannelPostRelationExpansionService(
-            TelegramChannelPostRelationRepository relationRepository
+            TelegramChannelPostRelationRepository relationRepository,
+            TelegramChannelPostSearchEligibility searchEligibility
     ) {
         this.relationRepository = relationRepository;
+        this.searchEligibility = searchEligibility;
     }
 
     /**
@@ -185,7 +189,7 @@ public class TelegramChannelPostRelationExpansionService {
                             ? targetPost
                             : sourcePost;
 
-            if (!relatedPost.isSearchable()) {
+            if (!searchEligibility.isSearchable(relatedPost)) {
                 continue;
             }
 

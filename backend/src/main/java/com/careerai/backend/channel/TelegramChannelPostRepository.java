@@ -2,8 +2,12 @@ package com.careerai.backend.channel;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -79,4 +83,33 @@ public interface TelegramChannelPostRepository extends JpaRepository<TelegramCha
         ORDER BY post.createdAt ASC
         """)
     List<Long> findReplyPostIdsWithoutRelation(Pageable pageable);
+
+    /**
+     * Одним SQL-запросом переводит публикации
+     * с наступившим expiresAt в состояние EXPIRED.
+     *
+     * Метод не выполняет повторный разбор metadata
+     * и поэтому подходит для частого запуска.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        UPDATE TelegramChannelPost post
+        SET post.freshnessStatus = :expiredStatus,
+            post.freshnessReason = :reason,
+            post.freshnessCheckedAt = :now,
+            post.updatedAt = :now
+        WHERE post.expiresAt IS NOT NULL
+          AND post.expiresAt <= :now
+          AND post.freshnessStatus IN :currentStatuses
+        """)
+    int expireDuePosts(
+            @Param("currentStatuses")
+            Collection<TelegramChannelPostFreshnessStatus> currentStatuses,
+            @Param("expiredStatus")
+            TelegramChannelPostFreshnessStatus expiredStatus,
+            @Param("now")
+            OffsetDateTime now,
+            @Param("reason")
+            String reason
+    );
 }

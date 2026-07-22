@@ -21,6 +21,9 @@ class TelegramChannelPostRelationExpansionServiceTest {
     private TelegramChannelPostRelationRepository
             relationRepository;
 
+    @Mock
+    private TelegramChannelPostSearchEligibility searchEligibility;
+
     @Test
     void addsSearchableRelatedPost() {
         TelegramChannelPost sourcePost =
@@ -54,9 +57,12 @@ class TelegramChannelPostRelationExpansionServiceTest {
                         )
         ).thenReturn(List.of(relation));
 
+        when(searchEligibility.isSearchable(sourcePost)).thenReturn(true);
+
         TelegramChannelPostRelationExpansionService service =
                 new TelegramChannelPostRelationExpansionService(
-                        relationRepository
+                        relationRepository,
+                        searchEligibility
                 );
 
         ChannelPostSearchResult initialResult =
@@ -124,9 +130,12 @@ class TelegramChannelPostRelationExpansionServiceTest {
                         )
         ).thenReturn(List.of(relation));
 
+        when(searchEligibility.isSearchable(sourcePost)).thenReturn(false);
+
         TelegramChannelPostRelationExpansionService service =
                 new TelegramChannelPostRelationExpansionService(
-                        relationRepository
+                        relationRepository,
+                        searchEligibility
                 );
 
         ChannelPostSearchResult initialResult =
@@ -162,7 +171,8 @@ class TelegramChannelPostRelationExpansionServiceTest {
     void doesNotQueryRelationsForEmptyResult() {
         TelegramChannelPostRelationExpansionService service =
                 new TelegramChannelPostRelationExpansionService(
-                        relationRepository
+                        relationRepository,
+                        searchEligibility
                 );
 
         ChannelPostSearchResult result =
@@ -175,7 +185,7 @@ class TelegramChannelPostRelationExpansionServiceTest {
                 result.allPosts().size()
         );
 
-        verifyNoInteractions(relationRepository);
+        verifyNoInteractions(relationRepository, searchEligibility);
     }
 
     private TelegramChannelPost createPost(

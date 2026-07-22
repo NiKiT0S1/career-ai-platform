@@ -24,19 +24,22 @@ public class ChannelPostSemanticSearchService {
     private final SemanticEmbeddingRepository embeddingRepository;
     private final TelegramChannelPostRepository postRepository;
     private final TelegramChannelPostMetadataRepository metadataRepository;
+    private final TelegramChannelPostSearchEligibility searchEligibility;
 
     public ChannelPostSemanticSearchService(
         SemanticSearchProperties properties,
 //        EmbeddingProvider embeddingProvider,
         SemanticEmbeddingRepository embeddingRepository,
         TelegramChannelPostRepository postRepository,
-        TelegramChannelPostMetadataRepository metadataRepository
+        TelegramChannelPostMetadataRepository metadataRepository,
+        TelegramChannelPostSearchEligibility searchEligibility
     ) {
         this.properties = properties;
 //        this.embeddingProvider = embeddingProvider;
         this.embeddingRepository = embeddingRepository;
         this.postRepository = postRepository;
         this.metadataRepository = metadataRepository;
+        this.searchEligibility = searchEligibility;
     }
 
     /**
@@ -118,7 +121,7 @@ public class ChannelPostSemanticSearchService {
                                                 storedEmbedding.sourceId()
                                         );
 
-                                if (post == null || !post.isSearchable()) {
+                                if (!searchEligibility.isSearchable(post)) {
                                     return null;
                                 }
 

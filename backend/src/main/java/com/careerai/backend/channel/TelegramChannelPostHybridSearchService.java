@@ -37,10 +37,13 @@ public class TelegramChannelPostHybridSearchService {
     private final TelegramChannelPostRelationExpansionService
             relationExpansionService;
 
+    private final TelegramChannelPostSearchEligibility searchEligibility;
+
     public TelegramChannelPostHybridSearchService(
             TelegramChannelPostStructuredSearchService structuredSearchService,
             ChannelPostSemanticSearchService semanticSearchService,
-            TelegramChannelPostRelationExpansionService relationExpansionService
+            TelegramChannelPostRelationExpansionService relationExpansionService,
+            TelegramChannelPostSearchEligibility searchEligibility
     ) {
         this.structuredSearchService =
                 structuredSearchService;
@@ -50,6 +53,8 @@ public class TelegramChannelPostHybridSearchService {
 
         this.relationExpansionService =
                 relationExpansionService;
+
+        this.searchEligibility = searchEligibility;
     }
 
     public ChannelPostSearchResult findRelevantPosts(
@@ -327,7 +332,7 @@ public class TelegramChannelPostHybridSearchService {
         if (result.size() >= limit
                 || post == null
                 || post.getId() == null
-                || !post.isSearchable()) {
+                || !searchEligibility.isSearchable(post)) {
             return;
         }
 

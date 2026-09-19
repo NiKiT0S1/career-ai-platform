@@ -13,7 +13,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class GroqProperties {
 
     private String baseUrl = "https://api.groq.com/openai/v1";
-    private String model = "llama-3.1-8b-instant";
+    private String model = "openai/gpt-oss-20b";
     private String key = "";
 
     private int connectTimeoutSeconds = 5;

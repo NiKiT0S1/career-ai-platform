@@ -22,6 +22,8 @@ import java.util.Map;
 public class GroqLlmProvider implements LlmProvider {
 
     private static final Logger log = LoggerFactory.getLogger(GroqLlmProvider.class);
+    private static final int GPT_OSS_REASONING_TOKEN_ALLOWANCE = 1024;
+    private static final int GPT_OSS_MAX_COMPLETION_TOKENS = 65536;
 
     private final GroqProperties properties;
     private final ObjectMapper objectMapper;
@@ -83,13 +85,32 @@ public class GroqLlmProvider implements LlmProvider {
             );
         }
         catch (HttpClientErrorException.NotFound e) {
-            log.error("Groq model was not found. taskType={}, model={}", request.taskType(), properties.getModel(), e);
+            boolean modelNotFound = isModelNotFound(e);
+            if (modelNotFound) {
+                log.warn("Groq model was not found or is inaccessible. Check GROQ_API_MODEL. taskType={}, model={}, elapsedMs={}",
+                        request.taskType(), properties.getModel(), elapsedMillis(startedAt));
+            } else {
+                log.warn("Groq request returned 404. Check Groq API base URL. taskType={}, model={}, elapsedMs={}",
+                        request.taskType(), properties.getModel(), elapsedMillis(startedAt));
+            }
 
             return LlmResponse.failure(
-                    "Groq model was not found",
+                    modelNotFound ? "Groq model was not found or is inaccessible" : "Groq request returned 404",
                     "Groq",
                     properties.getModel(),
-                    LlmErrorType.MODEL_NOT_FOUND,
+                    modelNotFound ? LlmErrorType.MODEL_NOT_FOUND : LlmErrorType.UNEXPECTED_ERROR,
+                    elapsedMillis(startedAt)
+            );
+        }
+        catch (TruncatedCompletionException e) {
+            log.warn("Groq completion reached its token limit. taskType={}, model={}, elapsedMs={}",
+                    request.taskType(), properties.getModel(), elapsedMillis(startedAt));
+
+            return LlmResponse.failure(
+                    "Groq completion reached its token limit",
+                    "Groq",
+                    properties.getModel(),
+                    LlmErrorType.UNEXPECTED_ERROR,
                     elapsedMillis(startedAt)
             );
         }
@@ -170,10 +191,15 @@ public class GroqLlmProvider implements LlmProvider {
                 request.topP()
         );
 
-        requestBody.put(
-                "max_tokens",
-                request.maxOutputTokens()
-        );
+        if (isGptOssModel()) {
+            // GPT-OSS counts hidden reasoning and visible text within the same completion limit.
+            requestBody.put("max_completion_tokens", Math.min(GPT_OSS_MAX_COMPLETION_TOKENS,
+                    (long) request.maxOutputTokens() + GPT_OSS_REASONING_TOKEN_ALLOWANCE));
+            requestBody.put("reasoning_effort", "low");
+            requestBody.put("include_reasoning", false);
+        } else {
+            requestBody.put("max_tokens", request.maxOutputTokens());
+        }
 
         if (request.responseFormat() == LlmResponseFormat.JSON) {
             requestBody.put(
@@ -224,18 +250,38 @@ public class GroqLlmProvider implements LlmProvider {
 
     private String extractText(String responseJson) throws Exception {
         JsonNode root = objectMapper.readTree(responseJson);
+        JsonNode choice = root.path("choices").path(0);
+
+        if ("length".equals(choice.path("finish_reason").asText())) {
+            throw new TruncatedCompletionException();
+        }
 
         JsonNode contentNode =
-                root.path("choices")
-                        .path(0)
-                        .path("message")
+                choice.path("message")
                         .path("content");
 
-        if (contentNode.isMissingNode() || contentNode.asText().isBlank()) {
+        if (contentNode.isMissingNode() || contentNode.isNull() || contentNode.asText().isBlank()) {
             throw new IllegalStateException("Groq response does not contain text");
         }
 
         return contentNode.asText();
+    }
+
+    private boolean isGptOssModel() {
+        return "openai/gpt-oss-20b".equals(properties.getModel())
+                || "openai/gpt-oss-120b".equals(properties.getModel());
+    }
+
+    private boolean isModelNotFound(HttpClientErrorException.NotFound exception) {
+        try {
+            JsonNode error = objectMapper.readTree(exception.getResponseBodyAsString());
+            return "model_not_found".equals(error.path("error").path("code").asText());
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static final class TruncatedCompletionException extends IllegalStateException {
     }
 
     private long elapsedMillis(long startedAtNanos) {

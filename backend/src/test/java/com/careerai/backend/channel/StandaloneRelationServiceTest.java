@@ -58,6 +58,38 @@ class StandaloneRelationServiceTest {
         verify(audits, atLeast(3)).save(any());
     }
 
+    @Test void discoveryUsesPersistedCandidateIdentityForAuditAndReturnedIds() {
+        var source = candidate.getSourcePost();
+        var target = candidate.getTargetPost();
+        when(em.find(TelegramChannelPost.class, 2L, LockModeType.PESSIMISTIC_WRITE)).thenReturn(source);
+        when(selector.select(source)).thenReturn(List.of(
+                new StandaloneRelationSelector.Selection(target, .9, true, "same event")));
+        when(candidates.save(any())).thenAnswer(invocation -> {
+            StandaloneRelationCandidate saved = new StandaloneRelationCandidate();
+            org.springframework.beans.BeanUtils.copyProperties(invocation.getArgument(0), saved);
+            saved.setId(42L);
+            return saved;
+        });
+
+        assertEquals(List.of(42L), service.discover(2L));
+        verify(audits).save(argThat(audit -> Long.valueOf(42L).equals(audit.getCandidateId())
+                && "DISCOVERED".equals(audit.getAction())));
+    }
+
+    @Test void automaticApprovalKeepsIdentityReturnedByRelationRepository() {
+        when(classifier.classify(any())).thenReturn(result(.99));
+        doAnswer(invocation -> {
+            TelegramChannelPostRelation saved = new TelegramChannelPostRelation();
+            org.springframework.beans.BeanUtils.copyProperties(invocation.getArgument(0), saved);
+            saved.setId(55L);
+            return saved;
+        }).when(relations).save(any());
+
+        assertTrue(service.process(1L));
+        assertEquals(55L, candidate.getRelationId());
+        assertEquals(StandaloneRelationCandidateStatus.AUTO_APPROVED, candidate.getStatus());
+    }
+
     @Test void uncertainResultWaitsForReviewAndDoesNotChangeAnswerRelations() {
         when(classifier.classify(any())).thenReturn(result(.9));
         service.process(1L);

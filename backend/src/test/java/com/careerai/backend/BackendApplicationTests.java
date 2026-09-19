@@ -17,7 +17,11 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
+import com.careerai.backend.channel.*;
 import com.careerai.backend.semantic.*;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.test.util.ReflectionTestUtils;
 import static org.mockito.Mockito.*;
 
@@ -37,6 +41,14 @@ class BackendApplicationTests {
     @Autowired ObjectMapper json;
     @Autowired SemanticLifecycleRepository sources;
     @Autowired SemanticEmbeddingRepository embeddings;
+    @Autowired StandaloneRelationCandidateRepository candidates;
+    @Autowired StandaloneRelationAuditRepository relationAudits;
+    @Autowired TelegramChannelPostRelationRepository relations;
+    @Autowired TelegramChannelPostRelationRootResolver relationRoots;
+    @Autowired StandaloneRelationSelector relationSelector;
+    @Autowired StandaloneRelationPolicy relationPolicy;
+    @Autowired PlatformTransactionManager transactions;
+    @PersistenceContext EntityManager entityManager;
     final HttpClient http=HttpClient.newHttpClient();
 
     @Test void migrationAndEveryAdminListRunAgainstPostgres() throws Exception {
@@ -125,6 +137,87 @@ class BackendApplicationTests {
         } finally {
             embeddings.delete(SemanticSourceType.FAQ,id);sources.clearRetry(SemanticSourceType.FAQ,id);
             jdbc.update("DELETE FROM faq_entries WHERE id=?",id);
+        }
+    }
+    @Test void standaloneRelationLifecyclePersistsGeneratedIdsAndRetractsOnlyOwnedInference() {
+        long chat = UUID.randomUUID().getMostSignificantBits() | Long.MIN_VALUE;
+        String announcement = "Orion engineering workshop robotics internship laboratory campus Friday registration";
+        var classifier = mock(StandaloneRelationClassifier.class);
+        when(classifier.classify(any())).thenReturn(new StandaloneRelationClassifier.Result(
+                true, true, TelegramChannelPostRelationType.CANCELLATION, "Workshop cancelled", .99, true,
+                "integration", "integration", "{}", null));
+        var service = new StandaloneRelationService(candidates, relationAudits, relations, relationRoots,
+                relationSelector, relationPolicy, classifier, entityManager, java.time.Clock.systemUTC(), transactions);
+        try {
+            long target = jdbc.queryForObject("""
+                    INSERT INTO telegram_channel_posts (telegram_chat_id,telegram_message_id,text,posted_at)
+                    VALUES (?,1,?,CURRENT_TIMESTAMP - INTERVAL '1 day') RETURNING id
+                    """, Long.class, chat, announcement);
+            long source = jdbc.queryForObject("""
+                    INSERT INTO telegram_channel_posts (telegram_chat_id,telegram_message_id,text,posted_at)
+                    VALUES (?,2,?,CURRENT_TIMESTAMP) RETURNING id
+                    """, Long.class, chat, announcement + " cancelled");
+
+            List<Long> discovered = service.discover(source);
+            assertEquals(1, discovered.size());
+            Long candidateId = discovered.getFirst();
+            assertNotNull(candidateId);
+            assertEquals(1L, jdbc.queryForObject("""
+                    SELECT count(*) FROM standalone_relation_audit
+                    WHERE candidate_id=? AND action='DISCOVERED'
+                    """, Long.class, candidateId));
+            assertTrue(service.discover(source).isEmpty(), "Identical input must not create a duplicate candidate");
+
+            assertTrue(service.process(candidateId));
+            assertEquals("AUTO_APPROVED", jdbc.queryForObject(
+                    "SELECT status FROM standalone_relation_candidates WHERE id=?", String.class, candidateId));
+            Long relationId = jdbc.queryForObject(
+                    "SELECT relation_id FROM standalone_relation_candidates WHERE id=?", Long.class, candidateId);
+            assertNotNull(relationId, "The candidate must retain the generated ID of its inferred relation");
+            assertEquals(1L, jdbc.queryForObject("""
+                    SELECT count(*) FROM telegram_channel_post_relations
+                    WHERE id=? AND source_post_id=? AND target_post_id=? AND relation_origin='STANDALONE_INFERRED'
+                    """, Long.class, relationId, source, target));
+
+            jdbc.update("UPDATE telegram_channel_posts SET text=?,edited_at=CURRENT_TIMESTAMP WHERE id=?",
+                    announcement + " cancelled update", source);
+            List<Long> rediscovered = service.discover(source);
+            assertEquals(1, rediscovered.size());
+            Long replacementId = rediscovered.getFirst();
+            assertNotNull(replacementId);
+            assertNotEquals(candidateId, replacementId);
+            assertEquals("SUPERSEDED", jdbc.queryForObject(
+                    "SELECT status FROM standalone_relation_candidates WHERE id=?", String.class, candidateId));
+            assertEquals(0L, jdbc.queryForObject(
+                    "SELECT count(*) FROM telegram_channel_post_relations WHERE id=?", Long.class, relationId));
+            assertEquals(1L, jdbc.queryForObject("""
+                    SELECT count(*) FROM standalone_relation_audit
+                    WHERE candidate_id=? AND action='RELATION_RETRACTED'
+                    """, Long.class, candidateId));
+            assertTrue(service.discover(source).isEmpty());
+            assertEquals(2L, jdbc.queryForObject(
+                    "SELECT count(*) FROM standalone_relation_candidates WHERE source_post_id=?", Long.class, source));
+
+            assertTrue(service.process(replacementId));
+            Long protectedRelationId = jdbc.queryForObject(
+                    "SELECT relation_id FROM standalone_relation_candidates WHERE id=?", Long.class, replacementId);
+            assertNotNull(protectedRelationId);
+            // A later manual decision must survive invalidation of the original automatic candidate.
+            jdbc.update("UPDATE telegram_channel_post_relations SET relation_origin='MANUAL' WHERE id=?", protectedRelationId);
+            jdbc.update("UPDATE telegram_channel_posts SET text=?,edited_at=CURRENT_TIMESTAMP WHERE id=?",
+                    announcement + " cancelled update corrected", source);
+            assertTrue(service.discover(source).isEmpty());
+            assertEquals("SUPERSEDED", jdbc.queryForObject(
+                    "SELECT status FROM standalone_relation_candidates WHERE id=?", String.class, replacementId));
+            assertEquals("MANUAL", jdbc.queryForObject(
+                    "SELECT relation_origin FROM telegram_channel_post_relations WHERE id=?", String.class, protectedRelationId));
+            assertEquals(0L, jdbc.queryForObject("""
+                    SELECT count(*) FROM standalone_relation_audit
+                    WHERE candidate_id=? AND action='RELATION_RETRACTED'
+                    """, Long.class, replacementId));
+            verify(classifier, times(2)).classify(any());
+        } finally {
+            jdbc.update("DELETE FROM telegram_channel_posts WHERE telegram_chat_id=?", chat);
         }
     }
     String base(){return "http://localhost:"+port+"/api/admin/";}

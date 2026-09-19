@@ -37,5 +37,6 @@ public class StandaloneRelationCandidate {
     private Long relationId;
     @Column(nullable = false) private OffsetDateTime createdAt;
     @Column(nullable = false) private OffsetDateTime updatedAt;
-    @Version @Column(nullable = false) private Long entityVersion = 0L;
+    // A null boxed version identifies a new entity to Spring Data; Hibernate initializes it on insert.
+    @Version @Column(nullable = false) private Long entityVersion;
 }

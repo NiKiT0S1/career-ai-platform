@@ -88,7 +88,7 @@ public class StandaloneRelationService {
             boolean uniqueBest = i == 0 && (selected.size() == 1 || selection.score() - selected.get(1).score() >= .20);
             candidate.setAutoApprovalEligible(uniqueBest && selection.strongIdentity() && StandaloneRelationPolicy.hasChangeMarker(source.getText()));
             candidate.setCreatedAt(now()); candidate.setUpdatedAt(now());
-            candidates.save(candidate);
+            candidate = candidates.save(candidate);
             appendAudit(candidate, "DISCOVERED", "system", selection.reason());
             created.add(candidate.getId());
         }
@@ -224,7 +224,8 @@ public class StandaloneRelationService {
         relation.setClassificationProvider(candidate.getProvider()); relation.setClassificationModel(candidate.getModel());
         relation.setClassificationInputHash(candidate.getInputHash()); relation.setClassificationRawResponse(candidate.getRawResponse());
         relation.setClassifiedAt(now()); relation.setCreatedAt(now()); relation.setUpdatedAt(now());
-        relations.save(relation); candidate.setRelationId(relation.getId());
+        relation = relations.save(relation);
+        candidate.setRelationId(relation.getId());
     }
 
     private void retractInferredRelation(StandaloneRelationCandidate candidate) {

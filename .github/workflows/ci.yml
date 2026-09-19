@@ -1,0 +1,66 @@
+name: Backend verification
+
+on:
+  push:
+    branches: [main, ChatGPT, 'feature/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: careerai-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: careerai_test
+          POSTGRES_USER: careerai_test
+          # Disposable container credential, never a production secret.
+          POSTGRES_PASSWORD: careerai_ci_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U careerai_test -d careerai_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CAREERAI_INTEGRATION_TESTS: 'true'
+      TEST_DB_URL: jdbc:postgresql://localhost:5432/careerai_test
+      TEST_DB_USERNAME: careerai_test
+      TEST_DB_PASSWORD: careerai_ci_only
+      TELEGRAM_POLLING_ENABLED: 'false'
+      CAREERAI_BACKGROUND_ENABLED: 'false'
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Java 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: backend/pom.xml
+      - name: Compile, test and package
+        run: bash ./mvnw --batch-mode --no-transfer-progress verify
+      - name: Save test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-test-reports
+          path: backend/target/surefire-reports/
+          if-no-files-found: warn
+          retention-days: 14

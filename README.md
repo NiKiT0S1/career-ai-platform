@@ -1,193 +1,97 @@
-# CareerAI Platform
+# CareerAI
 
-CareerAI is a Telegram-based AI assistant for the AITU Career Center.
+Telegram-ассистент Центра карьеры и трудоустройства AITU. Бот отвечает студентам по официальной FAQ-базе и публикациям канала: практика, дуальное обучение, трудоустройство, вакансии, мероприятия и изменения сроков. Языки ответов — русский, казахский и английский.
 
-At the current stage, the project contains a Spring Boot backend that connects a Telegram bot with Google Gemini API. A student can send a message to the Telegram bot, the backend receives it, sends the text to Gemini, and returns the AI-generated answer back to Telegram.
+Ветка `ChatGPT` содержит развитие исходного backend до панели администратора. Анализ резюме и отдельная архитектура масштабирования в этот этап не входят. Состояние проверок нужно смотреть в результатах CI и отчёте проверки конкретного коммита; наличие функции в этом README само по себе не означает проверку на живом Telegram-канале.
 
-## Repository Structure
+## Что реализовано
 
-```text
-career-ai-platform/
-├── backend/
-├── scripts/
-├── .gitignore
-└── README.md
-```
+| Этап | Поведение |
+| --- | --- |
+| Исходный backend | Telegram polling, сохранение пользователей/переписки/offset, FAQ, импорт новых и отредактированных постов, извлечение metadata, Gemini/Groq, семантический и структурированный поиск |
+| Актуальность и reply-связи | Распознавание сроков, проверка `expiresAt` при поиске, ручной архив, reply-уточнения/исправления/отмены, сохранение частичной области изменения |
+| Smart Answer Execution | Прямой ответ для простого общения, точное FAQ-совпадение, безопасные списки со ссылками, полноценный RAG для сложных вопросов; ограниченные TTL-кэши |
+| Phase 7.6.4 | Поиск связей самостоятельных публикаций того же канала, отдельные кандидаты, консервативное автоматическое подтверждение, ручная проверка, retry и аудит |
+| Phase 7.7 | Исключение устаревших embeddings, удаление векторов недоступных источников, переиндексация изменений, ограниченные фоновые пакеты и повторы |
+| Phase 7.8 | Независимые фильтры периода публикации и актуальности, исторические запросы, бизнес-часовой пояс, равное распределение лимита между категориями |
+| Admin Mini App | Публикации, FAQ, metadata, архив/восстановление, связи и кандидаты, обслуживание, журнал действий; вход через подписанные Telegram-данные и список разрешённых ID |
 
-## Backend Structure
+Неподтверждённые связи не становятся фактами для RAG. Если цепочка уточнений не помещается в ограниченный контекст, бот сообщает, что не может подтвердить условия, и даёт ссылки на источники. Ручной архив не появляется в студенческих ответах даже по запросу «все, включая истёкшие».
+
+## Стек и структура
+
+Java 21 · Spring Boot 4.1.0 · Maven Wrapper · PostgreSQL 17 · Flyway · Caffeine · Telegram Bot API · Gemini/Groq.
+
+Векторы хранятся в PostgreSQL как `DOUBLE PRECISION[]`; расширение pgvector не требуется. Панель — HTML/CSS/JavaScript внутри того же Spring Boot приложения, отдельная frontend-сборка не нужна.
 
 ```text
 backend/
-├── .mvn/
-│   └── wrapper/
-│       └── maven-wrapper.properties
-├── src/
-│   ├── main/
-│   │   ├── java/
-│   │   │   └── com/
-│   │   │       └── careerai/
-│   │   │           └── backend/
-│   │   │               ├── BackendApplication.java
-│   │   │               ├── ai/
-│   │   │               │   ├── GeminiLlmProvider.java
-│   │   │               │   ├── GeminiProperties.java
-│   │   │               │   └── LlmProvider.java
-│   │   │               ├── health/
-│   │   │               │   └── HealthCheckController.java
-│   │   │               └── telegram/
-│   │   │                   ├── TelegramBotProperties.java
-│   │   │                   ├── TelegramBotService.java
-│   │   │                   ├── TelegramPollingService.java
-│   │   │                   └── TelegramSendMessageRequest.java
-│   │   └── resources/
-│   │       └── application.properties
-│   └── test/
-│       └── java/
-│           └── com/
-│               └── careerai/
-│                   └── backend/
-│                       └── BackendApplicationTests.java
-├── .gitattributes
-├── .gitignore
-├── mvnw
-├── mvnw.cmd
-└── pom.xml
+  src/main/java/com/careerai/backend/
+    admin/       # авторизация, API, аудит и обслуживание
+    answer/      # планировщик быстрых ответов и кэши
+    channel/     # публикации, сроки, связи и история
+    semantic/    # embeddings, поиск и жизненный цикл
+    telegram/    # polling, команды и отправка
+    faq/         # официальная база знаний
+  src/main/resources/
+    db/migration/
+    static/admin/
+  src/test/
+docs/
+.env.example
+.github/workflows/ci.yml
 ```
 
-## Tech Stack
+## Запуск
 
-* Java 21
-* Spring Boot 3
-* Maven
-* Telegram Bot API
-* Google Gemini API
-* Lombok
-* Spring Boot Actuator
-
-## Current Features
-
-* Spring Boot backend application
-* Health check endpoint
-* Telegram bot integration through polling
-* `/start` command handling
-* Receiving text messages from Telegram
-* Sending user messages to Google Gemini API
-* Returning Gemini responses back to Telegram
-* Basic fallback response if Gemini API is temporarily unavailable
-
-## How It Works
-
-```text
-Student sends a message to Telegram bot
-        ↓
-Spring Boot backend receives the message through polling
-        ↓
-Backend extracts chat ID and message text
-        ↓
-Backend sends the text to Gemini API
-        ↓
-Gemini generates an answer
-        ↓
-Backend sends the answer back to Telegram
-```
-
-## Environment Variables
-
-Before running the backend, configure the following environment variables:
-
-```text
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-GEMINI_API_KEY=your_gemini_api_key
-```
-
-Do not store real tokens or API keys directly in the source code.
-
-## Backend Configuration
-
-The backend configuration is located here:
-
-```text
-backend/src/main/resources/application.properties
-```
-
-Current configuration example:
-
-```properties
-spring.application.name=careerai-backend
-server.port=8080
-
-management.endpoints.web.exposure.include=health,info
-
-telegram.bot.token=${TELEGRAM_BOT_TOKEN}
-
-gemini.api.key=${GEMINI_API_KEY}
-gemini.api.model=gemini-2.5-flash
-gemini.api.base-url=https://generativelanguage.googleapis.com/v1beta/models
-```
-
-## Run Locally
-
-Open the `backend/` directory in IntelliJ IDEA and run:
-
-```text
-BackendApplication
-```
-
-Or run from terminal:
-
-```bash
-cd backend
-./mvnw spring-boot:run
-```
-
-On Windows PowerShell:
+1. Установить JDK 21 и PostgreSQL 17. Создать **отдельную** базу для новой версии или восстановить туда копию текущей базы.
+2. Заполнить переменные окружения по [.env.example](.env.example). Spring Boot сам не загружает `.env`: значения нужно передать через настройки запуска IntelliJ, оболочку или менеджер секретов сервера.
+3. Для первого запуска задать `TELEGRAM_POLLING_ENABLED=false` и `CAREERAI_BACKGROUND_ENABLED=false`, проверить подключение к копии базы и миграции.
+4. Запустить backend из IntelliJ (`BackendApplication`) или из каталога `backend`:
 
 ```powershell
-cd backend
 .\mvnw.cmd spring-boot:run
 ```
 
-## Health Check
+На Linux/macOS:
 
-After starting the backend, open:
-
-```text
-http://localhost:8080/actuator/health
+```bash
+bash ./mvnw spring-boot:run
 ```
 
-Expected result:
+Health endpoint: `http://localhost:8080/actuator/health`. Для работы с Telegram включить polling только у одного экземпляра с данным токеном. Для получения новых публикаций бот должен иметь доступ к нужному каналу. Полный автоматический импорт старой истории канала этой версией не заявляется.
 
-```json
-{
-  "status": "UP"
-}
+Подробности: [запуск, база, миграции и восстановление](docs/deployment.md), [подключение и работа с админ-панелью](docs/admin-panel.md).
+
+## Команды бота
+
+- `/start`, `/help`, `/about` — знакомство и помощь.
+- `/faq` — список официальных вопросов и ответов.
+- `/myid` — собственный Telegram user ID в личном чате.
+- `/admin` — кнопка панели для разрешённого администратора в личном чате.
+
+Обычные вопросы не требуют команд. Например: «Какие документы нужны для практики?», «Покажи все вакансии и мероприятия», «Какие публикации были вчера, включая истёкшие?».
+
+## Проверки
+
+Из `backend`:
+
+```powershell
+.\mvnw.cmd verify
 ```
 
-A custom health endpoint is also available:
+Интеграционный запуск требует отдельной PostgreSQL-базы и переменных `CAREERAI_INTEGRATION_TESTS=true`, `TEST_DB_URL`, `TEST_DB_USERNAME`, `TEST_DB_PASSWORD`. Не указывать рабочую базу: интеграционные тесты создают и изменяют тестовые данные. CI поднимает собственный PostgreSQL 17, включает интеграционные тесты и сохраняет отчёты.
 
-```text
-http://localhost:8080/api/health
-```
+Проверки без внешних API не заменяют финальную демонстрацию с реальными Telegram и AI-провайдерами. Перед показом менеджерам стоит проверить доступ администратора, импорт нового/отредактированного поста, правильную отмену предложения и ответы на RU/KZ/EN.
 
-## Telegram Bot
+## Сохранённая исходная версия
 
-The Telegram bot currently works through polling.
+Исходная разработка сохранена отдельно от новых изменений:
 
-This means that the backend regularly asks Telegram for new messages. For local development, this is simpler than using webhooks because the backend runs on `localhost`.
+- `backup/before-chatgpt-2026-09-19` → `6cdf8a9356ca02021ad025d1bad870f4d6c3e066` — последняя исходная версия `feature/freshness-archiving`.
+- `backup/main-2026-09-19` → `b10da1a54240d6c42b327a28e61e7d474d4b90f3` — исходный `main`.
+- Новая разработка — `ChatGPT`. `main` и исходная рабочая папка на Desktop сохранены без включения новых изменений.
 
-Current bot behavior:
+Git хранит код, но не содержимое PostgreSQL и секреты. Для возврата к прежней версии использовать соответствующий код **и отдельную базу, восстановленную из дампа до обновления**. Переключение ветки не отменяет миграции. Пошаговый сценарий — в [инструкции восстановления](docs/deployment.md#возврат-к-исходной-версии).
 
-* `/start` returns a local greeting message
-* any other text message is sent to Gemini API
-* Gemini response is sent back to the same Telegram chat
-* if Gemini API is unavailable, the bot returns a fallback message
-
-## Project Status
-
-The project is currently in the first MVP stage.
-
-The main goal of this stage is to make the basic integration work:
-
-```text
-Telegram Bot → Spring Boot Backend → Gemini API → Telegram Bot
-```
+Технические детали: [быстрые ответы и история](docs/smart-answer-and-timeline.md), [самостоятельные связи](docs/standalone-relations.md), [план поставки](docs/IMPLEMENTATION_PLAN.md).

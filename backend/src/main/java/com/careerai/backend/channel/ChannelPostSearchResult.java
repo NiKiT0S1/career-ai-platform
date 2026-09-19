@@ -13,7 +13,8 @@ import java.util.Map;
 
 public record ChannelPostSearchResult(
         List<ChannelPostSearchGroup> groups,
-        List<TelegramChannelPostRelation> relations
+        List<TelegramChannelPostRelation> relations,
+        boolean relationContextComplete
 ) {
 
     public ChannelPostSearchResult {
@@ -24,6 +25,11 @@ public record ChannelPostSearchResult(
         relations = relations == null
                 ? List.of()
                 : List.copyOf(relations);
+    }
+
+    public ChannelPostSearchResult(List<ChannelPostSearchGroup> groups,
+                                   List<TelegramChannelPostRelation> relations) {
+        this(groups, relations, true);
     }
 
     /**

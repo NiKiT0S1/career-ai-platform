@@ -3,6 +3,8 @@ package com.careerai.backend.channel;
 import com.careerai.backend.ai.LlmProvider;
 import com.careerai.backend.ai.LlmRequest;
 import com.careerai.backend.ai.LlmResponse;
+import com.careerai.backend.answer.AnswerCacheProperties;
+import com.careerai.backend.answer.BoundedQueryCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -12,6 +14,8 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.time.Clock;
+import java.time.LocalDate;
 
 /**
  * Анализирует вопрос пользователя через LLM и возвращает структурированный JSON.
@@ -28,11 +32,15 @@ public class ChannelQueryAnalyzer {
     private final LlmProvider llmProvider;
     private final ObjectMapper objectMapper;
     private final ChannelQueryAnalysisRequestFactory requestFactory;
+    private final BoundedQueryCache<ChannelQueryAnalysis> cache;
 
-    public ChannelQueryAnalyzer (LlmProvider llmProvider, ObjectMapper objectMapper, ChannelQueryAnalysisRequestFactory requestFactory) {
+    public ChannelQueryAnalyzer(LlmProvider llmProvider, ObjectMapper objectMapper,
+                                ChannelQueryAnalysisRequestFactory requestFactory,
+                                AnswerCacheProperties cacheProperties, Clock clock) {
         this.llmProvider = llmProvider;
         this.objectMapper = objectMapper;
         this.requestFactory = requestFactory;
+        this.cache = new BoundedQueryCache<>(cacheProperties.analysisSize(), cacheProperties.analysisTtlSeconds(), clock);
     }
 
     public ChannelQueryAnalysis analyze(String userMessage) {
@@ -40,24 +48,42 @@ public class ChannelQueryAnalyzer {
             return ChannelQueryAnalysis.unknown();
         }
 
+        ChannelQueryAnalysis cached = cache.get("analysis-v3", userMessage, () -> analyzeUncached(userMessage));
+        return cached == null ? ChannelQueryAnalysis.unknown() : cached;
+    }
+
+    public void invalidateAll() {
+        cache.invalidateAll();
+    }
+
+    private ChannelQueryAnalysis analyzeUncached(String userMessage) {
         LlmRequest request = requestFactory.create(userMessage);
 
-        LlmResponse response = llmProvider.execute(request);
+        LlmResponse response;
+        try {
+            response = llmProvider.execute(request);
+        } catch (RuntimeException exception) {
+            log.warn("Channel query analysis unavailable. type={}", exception.getClass().getSimpleName());
+            return null;
+        }
 
-        if (response.failed()) {
+        if (response == null || response.failed()) {
             log.warn(
                     "Channel query analysis failed. provider={}, model={}, errorType={}",
-                    response.provider(),
-                    response.model(),
-                    response.errorType()
+                    response == null ? "unknown" : response.provider(),
+                    response == null ? "unknown" : response.model(),
+                    response == null ? "unknown" : response.errorType()
             );
 
-            return ChannelQueryAnalysis.unknown();
+            return null;
         }
 
 //        return parseAnalysis(response.text());
 
         ChannelQueryAnalysis analysis = parseAnalysis(response.text());
+        if (analysis == null || analysis.intent() == ChannelSearchIntent.UNKNOWN) {
+            return null;
+        }
 
         log.info(
                 "Channel query analysis completed. intent={}, topic={}, contentScopes={}, resultMode={}, needsChannelPosts={}, needsFaq={}, needsDeadlines={}",
@@ -112,6 +138,15 @@ public class ChannelQueryAnalyzer {
                             readText(root, "resultMode")
                     );
 
+            ChannelTimeScope timeScope = parseTimeScope(readText(root, "timeScope"));
+            ChannelFreshnessScope freshnessScope = parseFreshnessScope(readText(root, "freshnessScope"));
+            if (timeScope != ChannelTimeScope.ANY_TIME || freshnessScope != ChannelFreshnessScope.CURRENT) {
+                needsChannelPosts = true;
+                if (contentScopes.equals(List.of(ChannelContentScope.NONE))) {
+                    contentScopes = List.of(ChannelContentScope.ALL_UPDATES);
+                }
+            }
+
             if (!needsChannelPosts) {
                 contentScopes = List.of(
                         ChannelContentScope.NONE
@@ -125,17 +160,50 @@ public class ChannelQueryAnalyzer {
                     resultMode,
                     needsChannelPosts,
                     needsFaq,
-                    needsDeadlines
+                    needsDeadlines,
+                    readNullableText(root, "directAnswer"),
+                    timeScope,
+                    freshnessScope,
+                    readDate(root, "dateFrom"),
+                    readDate(root, "dateTo")
             );
         }
         catch (Exception exception) {
             log.warn(
-                    "Failed to parse channel query analysis. Raw LLM text: {}",
-                    llmText,
-                    exception
+                    "Failed to parse channel query analysis. type={}",
+                    exception.getClass().getSimpleName()
             );
 
-            return ChannelQueryAnalysis.unknown();
+            return null;
+        }
+    }
+
+    private ChannelTimeScope parseTimeScope(String value) {
+        if (value == null || value.isBlank()) return ChannelTimeScope.ANY_TIME;
+        try {
+            return ChannelTimeScope.valueOf(value.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException exception) {
+            // An invalid range must not silently widen the query to all dates.
+            return ChannelTimeScope.CUSTOM_RANGE;
+        }
+    }
+
+    private ChannelFreshnessScope parseFreshnessScope(String value) {
+        if (value == null || value.isBlank()) return ChannelFreshnessScope.CURRENT;
+        try {
+            return ChannelFreshnessScope.valueOf(value.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException exception) {
+            return ChannelFreshnessScope.CURRENT;
+        }
+    }
+
+    private LocalDate readDate(JsonNode root, String field) {
+        String value = readNullableText(root, field);
+        if (value == null) return null;
+        try {
+            return LocalDate.parse(value);
+        } catch (java.time.format.DateTimeParseException exception) {
+            return null;
         }
     }
 
@@ -145,7 +213,7 @@ public class ChannelQueryAnalyzer {
         }
 
         int startIndex = text.indexOf("{");
-        int endIndex = text.indexOf("}");
+        int endIndex = text.lastIndexOf("}");
 
         if (startIndex < 0 || endIndex < 0 || endIndex <= startIndex) {
             throw new IllegalArgumentException("LLM analysis response does not contain JSON object");

@@ -5,6 +5,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Низкоуровневый сервис для обращения к Telegram Bot API.
@@ -58,20 +60,38 @@ public class TelegramBotService {
         sendPlainMessage(chatId, text);
     }
 
+    public void sendWebAppMessage(long chatId, String text, String webAppUrl) {
+        if (!TelegramAdminLaunchService.isSecureWebAppUrl(webAppUrl)) {
+            throw new IllegalArgumentException("Telegram Web App requires an HTTPS URL");
+        }
+        String url = "https://api.telegram.org/bot%s/sendMessage".formatted(properties.getToken());
+        Map<String, Object> request = Map.of(
+                "chat_id", chatId,
+                "text", text,
+                "reply_markup", Map.of("inline_keyboard", List.of(List.of(
+                        Map.of("text", "Открыть панель", "web_app", Map.of("url", webAppUrl))))));
+        restClient.post().uri(url).body(request).retrieve().toBodilessEntity();
+    }
+
     public void sendHtmlMessage(long chatId, String htmlText) {
+        if (htmlText == null || htmlText.isBlank()) return;
+        if (htmlText.length() > TelegramMessageChunks.LIMIT) {
+            sendPlainMessage(chatId, TelegramMessageChunks.plain(htmlText));
+            return;
+        }
         try {
             sendMessageInternal(chatId, htmlText, "HTML");
         }
         catch (HttpClientErrorException.BadRequest e) {
-            log.warn("Telegram rejected HTML message. Sending plain text fallback. Reason: {}", e.getMessage());
+            log.warn("Telegram rejected HTML message; sending plain text fallback, chatId={}", chatId);
 
-            String plainText = stripHtmlTags(htmlText);
+            String plainText = TelegramMessageChunks.plain(htmlText);
             sendPlainMessage(chatId, plainText);
         }
     }
 
     public void sendPlainMessage(long chatId, String text) {
-        sendMessageInternal(chatId, text, null);
+        for (String chunk : TelegramMessageChunks.split(text)) sendMessageInternal(chatId, chunk, null);
     }
 
     private void sendMessageInternal(long chatId, String text, String parseMode) {
@@ -87,14 +107,4 @@ public class TelegramBotService {
                 .toBodilessEntity();
     }
 
-    private String stripHtmlTags(String html) {
-        return html
-                .replaceAll("(?i)<br\\s*/?>", "\n")
-                .replaceAll("(?i)</p>", "\n\n")
-                .replaceAll("(?i)<p>", "")
-                .replaceAll("<[^>]*>", "")
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .replace("&amp;", "&");
-    }
 }

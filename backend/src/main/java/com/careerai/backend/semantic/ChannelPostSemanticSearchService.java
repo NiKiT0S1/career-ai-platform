@@ -25,6 +25,7 @@ public class ChannelPostSemanticSearchService {
     private final TelegramChannelPostRepository postRepository;
     private final TelegramChannelPostMetadataRepository metadataRepository;
     private final TelegramChannelPostSearchEligibility searchEligibility;
+    private final SemanticDocumentContent documentContent;
 
     public ChannelPostSemanticSearchService(
         SemanticSearchProperties properties,
@@ -32,7 +33,8 @@ public class ChannelPostSemanticSearchService {
         SemanticEmbeddingRepository embeddingRepository,
         TelegramChannelPostRepository postRepository,
         TelegramChannelPostMetadataRepository metadataRepository,
-        TelegramChannelPostSearchEligibility searchEligibility
+        TelegramChannelPostSearchEligibility searchEligibility,
+        SemanticDocumentContent documentContent
     ) {
         this.properties = properties;
 //        this.embeddingProvider = embeddingProvider;
@@ -40,6 +42,7 @@ public class ChannelPostSemanticSearchService {
         this.postRepository = postRepository;
         this.metadataRepository = metadataRepository;
         this.searchEligibility = searchEligibility;
+        this.documentContent = documentContent;
     }
 
     /**
@@ -56,6 +59,7 @@ public class ChannelPostSemanticSearchService {
 
         if (queryEmbedding == null
                 || queryEmbedding.failed()
+                || !Objects.equals(queryEmbedding.model(), properties.getEmbeddingModel())
                 || queryEmbedding.values() == null
                 || queryEmbedding.values().length
                 != properties.getOutputDimensions()) {
@@ -122,6 +126,10 @@ public class ChannelPostSemanticSearchService {
                                         );
 
                                 if (!searchEligibility.isSearchable(post)) {
+                                    return null;
+                                }
+                                if (post.getText() == null || post.getText().isBlank()
+                                        || !Objects.equals(storedEmbedding.contentHash(), documentContent.channelHash(post))) {
                                     return null;
                                 }
 

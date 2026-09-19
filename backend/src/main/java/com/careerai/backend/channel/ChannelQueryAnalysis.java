@@ -2,6 +2,7 @@ package com.careerai.backend.channel;
 
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.time.LocalDate;
 
 /**
  * Результат анализа пользовательского запроса.
@@ -17,10 +18,17 @@ public record ChannelQueryAnalysis(
         ChannelResultMode resultMode,
         boolean needsChannelPosts,
         boolean needsFaq,
-        boolean needsDeadlines
+        boolean needsDeadlines,
+        String directAnswer,
+        ChannelTimeScope timeScope,
+        ChannelFreshnessScope freshnessScope,
+        LocalDate dateFrom,
+        LocalDate dateTo
 ) {
 
     public ChannelQueryAnalysis {
+        timeScope = timeScope == null ? ChannelTimeScope.ANY_TIME : timeScope;
+        freshnessScope = freshnessScope == null ? ChannelFreshnessScope.CURRENT : freshnessScope;
         intent = intent == null
                 ? ChannelSearchIntent.UNKNOWN
                 : intent;
@@ -30,6 +38,23 @@ public record ChannelQueryAnalysis(
         resultMode = resultMode == null
                 ? ChannelResultMode.RELEVANT
                 : resultMode;
+    }
+
+    public ChannelQueryAnalysis(ChannelSearchIntent intent, String topic,
+                                List<ChannelContentScope> contentScopes, ChannelResultMode resultMode,
+                                boolean needsChannelPosts, boolean needsFaq, boolean needsDeadlines) {
+        this(intent, topic, contentScopes, resultMode, needsChannelPosts, needsFaq, needsDeadlines, null);
+    }
+
+    public ChannelQueryAnalysis(ChannelSearchIntent intent, String topic,
+                                List<ChannelContentScope> contentScopes, ChannelResultMode resultMode,
+                                boolean needsChannelPosts, boolean needsFaq, boolean needsDeadlines, String directAnswer) {
+        this(intent, topic, contentScopes, resultMode, needsChannelPosts, needsFaq, needsDeadlines,
+                directAnswer, ChannelTimeScope.ANY_TIME, ChannelFreshnessScope.CURRENT, null, null);
+    }
+
+    public boolean requiresTimelineSearch() {
+        return timeScope != ChannelTimeScope.ANY_TIME || freshnessScope != ChannelFreshnessScope.CURRENT;
     }
 
     public static ChannelQueryAnalysis unknown() {

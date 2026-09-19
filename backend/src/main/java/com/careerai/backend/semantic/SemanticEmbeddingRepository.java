@@ -63,6 +63,11 @@ public class SemanticEmbeddingRepository {
                       AND content_hash = ?
                       AND embedding_model = ?
                       AND embedding_dimensions = ?
+                      AND cardinality(embedding) = embedding_dimensions
+                      AND array_ndims(embedding) = 1
+                      AND NOT EXISTS (SELECT 1 FROM unnest(embedding) AS item(value)
+                          WHERE value IS NULL OR value IN ('NaN'::float8, 'Infinity'::float8, '-Infinity'::float8))
+                      AND EXISTS (SELECT 1 FROM unnest(embedding) AS item(value) WHERE value <> 0)
                 )
                 """,
                 Boolean.class,
@@ -86,8 +91,10 @@ public class SemanticEmbeddingRepository {
             String embeddingModel,
             double[] embedding
     ) {
-        if (embedding == null || embedding.length == 0) {
-            throw new IllegalArgumentException("Embedding vector cannot be empty");
+        if (embedding == null || embedding.length == 0
+                || !Arrays.stream(embedding).allMatch(Double::isFinite)
+                || Arrays.stream(embedding).noneMatch(value -> value != 0.0)) {
+            throw new IllegalArgumentException("Embedding vector must be nonempty, finite and nonzero");
         }
 
         Double[] boxedEmbedding = Arrays.stream(embedding)
@@ -152,11 +159,17 @@ public class SemanticEmbeddingRepository {
                 """
                 SELECT
                     source_id,
+                    content_hash,
                     embedding
                 FROM semantic_embeddings
                 WHERE source_type = ?
                   AND embedding_model = ?
                   AND embedding_dimensions = ?
+                  AND cardinality(embedding) = embedding_dimensions
+                  AND array_ndims(embedding) = 1
+                  AND NOT EXISTS (SELECT 1 FROM unnest(embedding) AS item(value)
+                      WHERE value IS NULL OR value IN ('NaN'::float8, 'Infinity'::float8, '-Infinity'::float8))
+                  AND EXISTS (SELECT 1 FROM unnest(embedding) AS item(value) WHERE value <> 0)
                 """,
                 (resultSet, rowNumber) -> {
                     Array sqlArray = resultSet.getArray("embedding");
@@ -182,7 +195,8 @@ public class SemanticEmbeddingRepository {
 
                         return new SemanticEmbeddingVector(
                                 resultSet.getLong("source_id"),
-                                values
+                                values,
+                                resultSet.getString("content_hash")
                         );
                     }
                     finally {

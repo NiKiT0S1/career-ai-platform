@@ -29,6 +29,10 @@ import java.util.Objects;
 @Setter
 public class TelegramChannelPost {
 
+    @Version
+    @Column(name = "revision", nullable = false)
+    private long revision;
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;

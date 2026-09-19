@@ -8,6 +8,7 @@ package com.careerai.backend.semantic;
 
 public record SemanticEmbeddingVector(
         long sourceId,
-        double[] values
+        double[] values,
+        String contentHash
 ) {
 }

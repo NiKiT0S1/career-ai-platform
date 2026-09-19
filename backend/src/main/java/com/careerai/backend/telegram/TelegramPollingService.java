@@ -15,6 +15,7 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -27,6 +28,7 @@ import tools.jackson.databind.ObjectMapper;
  */
 
 @Service
+@ConditionalOnProperty(name = "telegram.bot.polling-enabled", havingValue = "true", matchIfMissing = true)
 public class TelegramPollingService {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramPollingService.class);
@@ -44,6 +46,7 @@ public class TelegramPollingService {
     private final TelegramChannelPostService telegramChannelPostService;
     private final TelegramChannelPostAnswerService telegramChannelPostAnswerService;
     private final FaqEntryService faqEntryService;
+    private final TelegramAdminLaunchService adminLaunchService;
 
     private long offset = 0;
     private boolean offsetInitialized = false;
@@ -58,7 +61,8 @@ public class TelegramPollingService {
                                   TelegramHtmlSanitizer telegramHtmlSanitizer,
                                   TelegramChannelPostService telegramChannelPostService,
                                   TelegramChannelPostAnswerService telegramChannelPostAnswerService,
-                                  FaqEntryService faqEntryService) {
+                                  FaqEntryService faqEntryService,
+                                  TelegramAdminLaunchService adminLaunchService) {
         this.telegramBotService = telegramBotService;
         this.objectMapper = objectMapper;
         this.llmProvider = llmProvider;
@@ -70,6 +74,7 @@ public class TelegramPollingService {
         this.telegramChannelPostService = telegramChannelPostService;
         this.telegramChannelPostAnswerService = telegramChannelPostAnswerService;
         this.faqEntryService = faqEntryService;
+        this.adminLaunchService = adminLaunchService;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -198,6 +203,32 @@ public class TelegramPollingService {
             return;
         }
 
+        if (isCommand(normalizedText, "myid")) {
+            if (!"private".equals(message.path("chat").path("type").asText())) {
+                sendAndSavePlainMessage(telegramUser, chatId, "Напиши мне /myid в личном чате.");
+                return;
+            }
+            JsonNode userId = message.path("from").path("id");
+            String response = userId.isIntegralNumber()
+                    ? "Твой Telegram ID: " + userId.asLong()
+                    : "Не удалось определить ID отправителя этого сообщения.";
+            sendAndSavePlainMessage(telegramUser, chatId, response);
+            return;
+        }
+
+        if (isCommand(normalizedText, "admin")) {
+            JsonNode sender = message.path("from").path("id");
+            long senderId = sender.isIntegralNumber() && sender.canConvertToLong() ? sender.asLong() : 0;
+            var launch = adminLaunchService.prepare(message.path("chat").path("type").asText(), senderId);
+            if (launch.allowed()) {
+                telegramBotService.sendWebAppMessage(chatId, launch.message(), launch.webAppUrl());
+                chatMessageService.saveAssistantMessage(telegramUser, chatId, launch.message());
+            } else {
+                sendAndSavePlainMessage(telegramUser, chatId, launch.message());
+            }
+            return;
+        }
+
         TypingActionHandle typingActionHandle = telegramTypingService.startTyping(chatId);
 
         try {
@@ -234,19 +265,24 @@ public class TelegramPollingService {
     }
 
     private boolean isStartCommand(String text) {
-        return text.startsWith("/start");
+        return isCommand(text, "start");
     }
 
     private boolean isHelpCommand(String text) {
-        return text.startsWith("/help");
+        return isCommand(text, "help");
     }
 
     private boolean isAboutCommand(String text) {
-        return text.startsWith("/about");
+        return isCommand(text, "about");
     }
 
     private boolean isFaqCommand(String text) {
-        return text.startsWith("/faq");
+        return isCommand(text, "faq");
+    }
+
+    static boolean isCommand(String text, String command) {
+        return text != null && text.matches("(?i)^/" + java.util.regex.Pattern.quote(command)
+                + "(?:@[A-Za-z0-9_]+)?(?:\\s.*)?$");
     }
 
     private long elapsedMillis(long startedAtNanos) {

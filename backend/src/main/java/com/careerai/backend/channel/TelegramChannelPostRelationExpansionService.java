@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.function.Predicate;
 
 /**
  * Дополняет результаты поиска явно связанными
@@ -49,6 +50,12 @@ public class TelegramChannelPostRelationExpansionService {
     public ChannelPostSearchResult expand(
             ChannelPostSearchResult searchResult
     ) {
+        return expand(searchResult, searchEligibility::isSearchable);
+    }
+
+    /** Separate historical eligibility only for explicitly requested timeline context. */
+    public ChannelPostSearchResult expand(ChannelPostSearchResult searchResult,
+                                          Predicate<TelegramChannelPost> relatedEligibility) {
         if (searchResult == null) {
             return ChannelPostSearchResult.empty();
         }
@@ -72,6 +79,8 @@ public class TelegramChannelPostRelationExpansionService {
                         .findConnectedToPostIds(basePostIds)
                         .stream()
                         .filter(this::hasValidPosts)
+                        .sorted(Comparator.comparing((TelegramChannelPostRelation relation) -> effectiveDate(relation.getSourcePost()),
+                                Comparator.nullsLast(Comparator.reverseOrder())))
                         .toList();
 
         if (foundRelations.isEmpty()) {
@@ -84,7 +93,8 @@ public class TelegramChannelPostRelationExpansionService {
                         .map(group ->
                                 expandGroup(
                                         group,
-                                        foundRelations
+                                        foundRelations,
+                                        relatedEligibility
                                 )
                         )
                         .toList();
@@ -123,10 +133,19 @@ public class TelegramChannelPostRelationExpansionService {
                         )
                         .toList();
 
+        // A dropped older cancellation can remain effective after newer unrelated updates.
+        // Never claim a chain is complete merely because its newest four posts fit the budget.
+        boolean omittedEligibleRelation = foundRelations.stream().anyMatch(relation ->
+                (!finalPostIds.contains(relation.getSourcePost().getId())
+                        && relatedEligibility.test(relation.getSourcePost()))
+                || (!finalPostIds.contains(relation.getTargetPost().getId())
+                        && relatedEligibility.test(relation.getTargetPost())));
+
         ChannelPostSearchResult expandedResult =
                 new ChannelPostSearchResult(
                         expandedGroups,
-                        includedRelations
+                        includedRelations,
+                        searchResult.relationContextComplete() && !omittedEligibleRelation
                 );
 
         int basePostCount =
@@ -135,14 +154,15 @@ public class TelegramChannelPostRelationExpansionService {
         int finalPostCount =
                 expandedResult.allPosts().size();
 
-        log.info("Channel post relation expansion completed. basePosts={}, foundRelations={}, includedRelations={}, addedPosts={}, finalPosts={}", basePostCount, foundRelations.size(), includedRelations.size(), finalPostCount - basePostCount, finalPostCount);
+        log.info("Channel post relation expansion completed. basePosts={}, foundRelations={}, includedRelations={}, addedPosts={}, finalPosts={}, complete={}", basePostCount, foundRelations.size(), includedRelations.size(), finalPostCount - basePostCount, finalPostCount, expandedResult.relationContextComplete());
 
         return expandedResult;
     }
 
     private ChannelPostSearchGroup expandGroup(
             ChannelPostSearchGroup group,
-            List<TelegramChannelPostRelation> relations
+            List<TelegramChannelPostRelation> relations,
+            Predicate<TelegramChannelPost> relatedEligibility
     ) {
         Map<Long, TelegramChannelPost> postsById =
                 new LinkedHashMap<>();
@@ -189,7 +209,7 @@ public class TelegramChannelPostRelationExpansionService {
                             ? targetPost
                             : sourcePost;
 
-            if (!searchEligibility.isSearchable(relatedPost)) {
+            if (!relatedEligibility.test(relatedPost)) {
                 continue;
             }
 

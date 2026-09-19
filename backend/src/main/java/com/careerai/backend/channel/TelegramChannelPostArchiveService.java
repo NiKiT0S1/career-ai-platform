@@ -1,8 +1,10 @@
 package com.careerai.backend.channel;
 
+import com.careerai.backend.semantic.ChannelPostEligibilityChangedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
@@ -20,10 +22,13 @@ public class TelegramChannelPostArchiveService {
 
     private final TelegramChannelPostRepository postRepository;
     private final Clock clock;
+    private final ApplicationEventPublisher events;
 
-    public TelegramChannelPostArchiveService(TelegramChannelPostRepository postRepository, Clock clock) {
+    public TelegramChannelPostArchiveService(TelegramChannelPostRepository postRepository, Clock clock,
+                                             ApplicationEventPublisher events) {
         this.postRepository = postRepository;
         this.clock = clock;
+        this.events = events;
     }
 
     /**
@@ -45,6 +50,7 @@ public class TelegramChannelPostArchiveService {
 
         if (changed) {
             postRepository.save(post);
+            events.publishEvent(new ChannelPostEligibilityChangedEvent(postId));
 
             log.info("Telegram channel post archived. postId={}, telegramMessageId={}, archivedAt={}, reason={}", post.getId(), post.getTelegramMessageId(), post.getArchivedAt(), post.getArchiveReason());
         }
@@ -66,6 +72,7 @@ public class TelegramChannelPostArchiveService {
 
         if (changed) {
             postRepository.save(post);
+            events.publishEvent(new ChannelPostEligibilityChangedEvent(postId));
 
             log.info("Telegram channel post restored. postId={}, telegramMessageId={}", post.getId(), post.getTelegramMessageId());
         }

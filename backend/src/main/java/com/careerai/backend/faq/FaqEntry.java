@@ -28,6 +28,10 @@ import java.time.OffsetDateTime;
 @Setter
 public class FaqEntry {
 
+    @Version
+    @Column(name = "revision", nullable = false)
+    private long revision;
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;

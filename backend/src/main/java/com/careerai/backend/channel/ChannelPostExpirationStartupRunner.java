@@ -16,6 +16,7 @@ import org.springframework.stereotype.Component;
  */
 
 @Component
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name="careerai.background.enabled",havingValue="true",matchIfMissing=true)
 @Order(10)
 public class ChannelPostExpirationStartupRunner implements ApplicationRunner {
 

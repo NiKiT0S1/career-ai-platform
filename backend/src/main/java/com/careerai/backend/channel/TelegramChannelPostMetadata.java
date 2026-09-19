@@ -29,6 +29,10 @@ import java.time.OffsetDateTime;
 @Setter
 public class TelegramChannelPostMetadata {
 
+    @Version
+    @Column(name = "revision", nullable = false)
+    private long revision;
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;

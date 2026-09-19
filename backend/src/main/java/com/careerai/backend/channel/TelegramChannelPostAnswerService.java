@@ -2,6 +2,7 @@ package com.careerai.backend.channel;
 
 import com.careerai.backend.ai.LlmProvider;
 import com.careerai.backend.ai.LlmResponse;
+import com.careerai.backend.answer.*;
 import com.careerai.backend.faq.FaqEntry;
 import com.careerai.backend.faq.FaqEntryService;
 import com.careerai.backend.semantic.EmbeddingResult;
@@ -13,8 +14,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.time.Clock;
 import java.time.OffsetDateTime;
-import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 
@@ -36,8 +37,6 @@ public class TelegramChannelPostAnswerService {
 
     private static final int MAX_EXHAUSTIVE_CONTEXT_POSTS = 30;
 
-    private static final ZoneId ASTANA_ZONE_ID = ZoneId.of("Asia/Almaty");
-
     private static final DateTimeFormatter DATE_TIME_FORMATTER =
             DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm");
 
@@ -52,6 +51,11 @@ public class TelegramChannelPostAnswerService {
     private final FaqEntryService faqEntryService;
     private final FaqSemanticSearchService faqSemanticSearchService;
     private final SemanticQueryEmbeddingService semanticQueryEmbeddingService;
+    private final AnswerExecutionPlanner executionPlanner;
+    private final StructuredChannelAnswerBuilder structuredAnswerBuilder;
+    private final TelegramChannelPostSearchEligibility searchEligibility;
+    private final ChannelPostTimelineSearchService timelineSearchService;
+    private final Clock clock;
 
     public TelegramChannelPostAnswerService(
             TelegramChannelPostRepository repository,
@@ -61,7 +65,12 @@ public class TelegramChannelPostAnswerService {
             TelegramChannelPostHybridSearchService hybridSearchService,
             FaqEntryService faqEntryService,
             FaqSemanticSearchService faqSemanticSearchService,
-            SemanticQueryEmbeddingService semanticQueryEmbeddingService
+            SemanticQueryEmbeddingService semanticQueryEmbeddingService,
+            AnswerExecutionPlanner executionPlanner,
+            StructuredChannelAnswerBuilder structuredAnswerBuilder,
+            TelegramChannelPostSearchEligibility searchEligibility,
+            ChannelPostTimelineSearchService timelineSearchService,
+            Clock clock
     ) {
         this.repository = repository;
         this.queryAnalyzer = queryAnalyzer;
@@ -71,10 +80,33 @@ public class TelegramChannelPostAnswerService {
         this.faqEntryService = faqEntryService;
         this.faqSemanticSearchService = faqSemanticSearchService;
         this.semanticQueryEmbeddingService = semanticQueryEmbeddingService;
+        this.executionPlanner = executionPlanner;
+        this.structuredAnswerBuilder = structuredAnswerBuilder;
+        this.searchEligibility = searchEligibility;
+        this.timelineSearchService = timelineSearchService;
+        this.clock = clock;
     }
 
     public Optional<String> buildAnswerIfRelevant(String userMessage) {
+        long startedAt = System.nanoTime();
         ChannelQueryAnalysis analysis = queryAnalyzer.analyze(userMessage);
+
+        if (analysis.timeScope() == ChannelTimeScope.CUSTOM_RANGE
+                && new ChannelQueryWindowResolver(clock).resolve(analysis).isEmpty()) {
+            return completed(AnswerExecutionMode.GENERATIVE_RAG, AnswerLanguage.detect(userMessage).select(
+                    "Укажи корректный период публикаций: начальную и конечную дату, например с 1 по 15 сентября 2026 года.",
+                    "Жарияланымдар кезеңінің басталу және аяқталу күнін көрсетіңіз, мысалы 2026 жылғы 1–15 қыркүйек.",
+                    "Please specify a valid publication date range, for example September 1–15, 2026."), startedAt);
+        }
+
+        Optional<String> direct = executionPlanner.directAnswer(userMessage, analysis);
+        if (direct.isPresent()) return completed(AnswerExecutionMode.DIRECT_ANSWER, direct.get(), startedAt);
+
+        if (analysis.intent() == ChannelSearchIntent.UNKNOWN) {
+            // A router outage must not turn a career question into an ungrounded general answer.
+            analysis = new ChannelQueryAnalysis(ChannelSearchIntent.GENERAL_UPDATES, null,
+                    List.of(ChannelContentScope.ALL_UPDATES), ChannelResultMode.RELEVANT, true, true, false);
+        }
 
         boolean shouldUseFaq = shouldUseFaqEntries(analysis);
         boolean shouldUseChannelPosts = shouldUseChannelPosts(analysis);
@@ -83,7 +115,33 @@ public class TelegramChannelPostAnswerService {
             return Optional.empty();
         }
 
-        Optional<EmbeddingResult> queryEmbedding = semanticQueryEmbeddingService.createQueryEmbedding(userMessage);
+        if (shouldUseFaq && !shouldUseChannelPosts) {
+            Optional<FaqEntry> exactFaq = executionPlanner.exactFaq(userMessage, analysis, faqEntryService.findActiveEntries());
+            if (exactFaq.isPresent()) {
+                return completed(AnswerExecutionMode.DIRECT_FAQ,
+                        escapeTelegramHtml(exactFaq.get().getFullAnswer()), startedAt);
+            }
+        }
+
+        if (executionPlanner.canTryStructuredChannel(userMessage, analysis)) {
+            // The whitelist ensures no keyword constraint; clear the LLM topic to avoid accidental filtering.
+            ChannelQueryAnalysis simpleList = new ChannelQueryAnalysis(analysis.intent(), null,
+                    analysis.contentScopes(), analysis.resultMode(), true, false, false);
+            ChannelPostSearchResult structured = findRelevantPosts(simpleList, Optional.empty());
+            if (!structured.relationContextComplete()) {
+                return completed(AnswerExecutionMode.GENERATIVE_RAG,
+                        buildIncompleteRelationsAnswer(userMessage, structured), startedAt);
+            }
+            boolean everyScopePresent = structured.groups().stream().map(ChannelPostSearchGroup::scope).toList()
+                    .containsAll(simpleList.contentScopes());
+            Optional<String> rendered = everyScopePresent
+                    ? structuredAnswerBuilder.build(userMessage, structured, MAX_EXHAUSTIVE_CONTEXT_POSTS)
+                    : Optional.empty();
+            if (rendered.isPresent()) return completed(AnswerExecutionMode.STRUCTURED_CHANNEL, rendered.get(), startedAt);
+        }
+
+        Optional<EmbeddingResult> queryEmbedding = analysis.requiresTimelineSearch() && !shouldUseFaq
+                ? Optional.empty() : semanticQueryEmbeddingService.createQueryEmbedding(userMessage);
 
         List<FaqEntry> faqEntries = shouldUseFaq
                 ? findRelevantFaqEntries(queryEmbedding)
@@ -97,26 +155,61 @@ public class TelegramChannelPostAnswerService {
                 )
                         : ChannelPostSearchResult.empty();
 
+        if (!postSearchResult.relationContextComplete()) {
+            return completed(AnswerExecutionMode.GENERATIVE_RAG,
+                    buildIncompleteRelationsAnswer(userMessage, postSearchResult), startedAt);
+        }
+
         if (faqEntries.isEmpty() && postSearchResult.isEmpty()) {
-            return Optional.of(buildNoConfirmedInformationAnswer());
+            return completed(AnswerExecutionMode.GENERATIVE_RAG, buildNoConfirmedInformationAnswer(userMessage), startedAt);
         }
 
         String ragPrompt = buildCombinedRagPrompt(userMessage, analysis, faqEntries, postSearchResult);
 
-        LlmResponse llmResponse = llmProvider.generateAnswer(ragPrompt);
+        LlmResponse llmResponse;
+        try {
+            llmResponse = llmProvider.generateAnswer(ragPrompt);
+        } catch (RuntimeException exception) {
+            log.warn("RAG generation unavailable. type={}", exception.getClass().getSimpleName());
+            llmResponse = null;
+        }
 
-        if (llmResponse.success()) {
-            return Optional.of(llmResponse.text());
+        if (llmResponse != null && llmResponse.success()
+                && llmResponse.text() != null && !llmResponse.text().isBlank()) {
+            return completed(AnswerExecutionMode.GENERATIVE_RAG,
+                    timelineHeading(userMessage, analysis) + llmResponse.text(), startedAt);
         }
 
         log.warn(
-                "Combined RAG answer generation failed. Using direct source fallback. provider={}, model={}, errorType={}",
-                llmResponse.provider(),
-                llmResponse.model(),
-                llmResponse.errorType()
+                "Combined RAG answer generation failed. Returning caution and source links. provider={}, model={}, errorType={}",
+                llmResponse == null ? "unknown" : llmResponse.provider(),
+                llmResponse == null ? "unknown" : llmResponse.model(),
+                llmResponse == null ? "unknown" : llmResponse.errorType()
         );
 
-        return Optional.of(buildDirectFallbackAnswer(faqEntries, postSearchResult.allPosts()));
+        return completed(AnswerExecutionMode.GENERATIVE_RAG,
+                buildProviderFailureAnswer(userMessage, analysis, faqEntries, postSearchResult.allPosts()), startedAt);
+    }
+
+    private Optional<String> completed(AnswerExecutionMode mode, String answer, long startedAt) {
+        log.info("Answer execution completed. mode={}, elapsedMs={}", mode, (System.nanoTime() - startedAt) / 1_000_000);
+        return Optional.of(answer);
+    }
+
+    private String buildIncompleteRelationsAnswer(String question, ChannelPostSearchResult sources) {
+        AnswerLanguage language = AnswerLanguage.detect(question);
+        StringBuilder answer = new StringBuilder(language.select(
+                "Не удалось собрать все связанные уточнения и отмены. Поэтому я не могу подтвердить условия этих публикаций. Проверь полную историю в канале или уточни информацию в Центре карьеры и трудоустройства.",
+                "Барлық байланысты нақтылаулар мен күшін жою хабарламаларын жинау мүмкін болмады. Сондықтан бұл жарияланымдардың шарттарын растай алмаймын. Арнадағы толық тарихты тексеріңіз немесе Мансап және жұмыспен қамту орталығына хабарласыңыз.",
+                "Some related updates or cancellations could not be included. I cannot confirm these publications' conditions. Please check the full channel history or contact the Career and Employment Center."));
+        List<String> links = sources.allPosts().stream().map(StructuredChannelAnswerBuilder::sourceUrl)
+                .flatMap(Optional::stream).distinct().limit(10).toList();
+        if (!links.isEmpty()) {
+            answer.append("\n\n").append(language.select("Ссылки на найденные источники:",
+                    "Табылған дереккөздерге сілтемелер:", "Links to the retrieved sources:")).append("\n")
+                    .append(String.join("\n", links));
+        }
+        return answer.toString();
     }
 
     private ChannelPostSearchResult findRelevantPosts(
@@ -128,6 +221,11 @@ public class TelegramChannelPostAnswerService {
                 ? MAX_EXHAUSTIVE_CONTEXT_POSTS
                 : MAX_CONTEXT_POSTS;
 
+        if (analysis.requiresTimelineSearch()) {
+            // Never widen an empty date/freshness result to the normal latest-post fallback.
+            return timelineSearchService.search(analysis, limit);
+        }
+
         ChannelPostSearchResult result =
                 hybridSearchService.findRelevantPosts(
                         analysis,
@@ -135,7 +233,7 @@ public class TelegramChannelPostAnswerService {
                         limit
                 );
 
-        if (!result.isEmpty()) {
+        if (!result.isEmpty() || !result.relationContextComplete()) {
             return result;
         }
 
@@ -145,7 +243,7 @@ public class TelegramChannelPostAnswerService {
             List<TelegramChannelPost> latestPosts =
                     repository.findLatestSearchableTextPosts(
                             PageRequest.of(0, limit)
-                    );
+                    ).stream().filter(searchEligibility::isSearchable).toList();
 
             if (!latestPosts.isEmpty()) {
                 return new ChannelPostSearchResult(
@@ -191,7 +289,7 @@ public class TelegramChannelPostAnswerService {
         StringBuilder prompt = new StringBuilder();
 
         String currentDateText = LocalDate
-                .now(ASTANA_ZONE_ID)
+                .now(clock)
                 .format(CURRENT_DATE_FORMATTER);
 
         prompt.append("""
@@ -202,7 +300,7 @@ public class TelegramChannelPostAnswerService {
             2. ПОСТЫ_ТЕЛЕГРАМ_КАНАЛА — свежие объявления, дедлайны, вакансии и новости из Telegram-канала.
             
             Текущая дата: %s.
-            Часовой пояс: Asia/Almaty.
+            Часовой пояс: %s.
     
             Строгие правила:
             - отвечай только на основе FAQ_ЦКИТ и ПОСТЫ_ТЕЛЕГРАМ_КАНАЛА;
@@ -301,7 +399,7 @@ public class TelegramChannelPostAnswerService {
             - документы, отчётность и порядок оформления бери из FAQ, если они там есть;
             - сроки, дедлайны и свежие изменения бери из Telegram-постов, если они там есть;
             - период прохождения практики и срок сдачи документов — это разные вещи, не смешивай их.
-            """.formatted(currentDateText));
+            """.formatted(currentDateText, clock.getZone().getId()));
 
         prompt.append("\nРезультат анализа запроса:\n");
         prompt.append("intent: ").append(analysis.intent()).append("\n");
@@ -316,6 +414,22 @@ public class TelegramChannelPostAnswerService {
         prompt.append("needsChannelPosts: ").append(analysis.needsChannelPosts()).append("\n");
         prompt.append("needsFaq: ").append(analysis.needsFaq()).append("\n");
         prompt.append("needsDeadlines: ").append(analysis.needsDeadlines()).append("\n");
+        prompt.append("timeScope: ").append(analysis.timeScope()).append("\n");
+        prompt.append("freshnessScope: ").append(analysis.freshnessScope()).append("\n");
+        prompt.append("publicationDateFromInclusive: ").append(analysis.dateFrom()).append("\n");
+        prompt.append("publicationDateToInclusive: ").append(analysis.dateTo()).append("\n");
+        if (analysis.requiresTimelineSearch()) {
+            prompt.append("""
+                    Это явная выборка по дате ПУБЛИКАЦИИ/истории, а не список действующих предложений.
+                    У каждой истёкшей записи явно напиши «срок истёк» на языке пользователя.
+                    Не приглашай откликаться на истёкшие предложения или регистрироваться на прошедшие события.
+                    Связанные публикации могут быть вне выбранного периода или статуса: это только контекст уточнения,
+                    их нельзя выдавать как отдельные совпадения выбранного периода.
+                    CURRENT/EXPIRED/ALL описывает статус на текущую дату, а не на момент публикации.
+                    Учитывай исходную дату публикации, не называй редактирование новой публикацией.
+                    Не утверждай полноту истории: передано ограниченное число последних совпадений.
+                    """);
+        }
 
         prompt.append("\nВопрос пользователя:\n");
         prompt.append(userMessage).append("\n\n");
@@ -413,6 +527,7 @@ public class TelegramChannelPostAnswerService {
                         .append("\n");
 
                 prompt.append("Текст:\n");
+                appendPublicationStatus(prompt, post);
                 prompt.append(post.getText())
                         .append("\n\n");
 
@@ -433,74 +548,44 @@ public class TelegramChannelPostAnswerService {
         );
     }
 
-    private String buildNoConfirmedInformationAnswer() {
-        return """
+    private String buildNoConfirmedInformationAnswer(String userMessage) {
+        return AnswerLanguage.detect(userMessage).select("""
                 У меня нет подтверждённой информации по этому вопросу в FAQ и в сохранённых постах Telegram-канала ЦКиТ.
 
                 Лучше обратиться в Центр карьеры и трудоустройства для уточнения.
-                """.trim();
+                """.trim(), "FAQ пен арнаның сақталған жарияланымдарында бұл сұраққа расталған ақпарат жоқ. Мансап және жұмыспен қамту орталығына хабарласыңыз.",
+                "There is no confirmed information on this question in the FAQ or saved channel posts. Please contact the Career and Employment Center.");
     }
 
-    private String buildDirectFallbackAnswer(List<FaqEntry> faqEntries, List<TelegramChannelPost> posts) {
-        StringBuilder answer = new StringBuilder();
-
-        answer.append("AI-модель сейчас не смогла обработать найденные источники.\n\n");
-
+    private String buildProviderFailureAnswer(String question, ChannelQueryAnalysis analysis,
+                                              List<FaqEntry> faqEntries, List<TelegramChannelPost> posts) {
+        AnswerLanguage language = AnswerLanguage.detect(question);
+        StringBuilder answer = new StringBuilder(timelineHeading(question, analysis));
+        answer.append(language.select(
+                "Сейчас не удалось обработать найденные источники и сопоставить уточнения. Я не могу подтвердить условия по этому вопросу. Попробуй позже или уточни информацию в Центре карьеры и трудоустройства.",
+                "Қазір табылған дереккөздерді өңдеу және нақтылауларды салыстыру мүмкін болмады. Бұл сұрақ бойынша шарттарды растай алмаймын. Кейінірек қайталаңыз немесе Мансап және жұмыспен қамту орталығына хабарласыңыз.",
+                "The answer service could not process the sources and compare their updates. I cannot confirm the conditions for this question. Please try again later or contact the Career and Employment Center."));
         if (!faqEntries.isEmpty()) {
-            answer.append("<b>Найденные FAQ-записи:</b>\n");
-
-            for (int i = 0; i < Math.min(faqEntries.size(), 5); i++) {
-                FaqEntry entry = faqEntries.get(i);
-
-                answer.append("<b>")
-                        .append(i + 1)
-                        .append(". ")
-                        .append(escapeTelegramHtml(entry.getQuestion()))
-                        .append("</b>\n");
-
-                answer.append(escapeTelegramHtml(entry.getShortAnswer()))
-                        .append("\n\n");
+            answer.append("\n\n").append(language.select(
+                    "Официальный список частых вопросов доступен через /faq.",
+                    "Ресми жиі қойылатын сұрақтар тізімі /faq арқылы қолжетімді.",
+                    "The official frequently asked questions are available through /faq."));
+        }
+        boolean headingAdded = false;
+        for (TelegramChannelPost post : posts.stream().limit(10).toList()) {
+            Optional<String> url = StructuredChannelAnswerBuilder.sourceUrl(post);
+            if (url.isEmpty()) continue;
+            if (!headingAdded) {
+                answer.append("\n\n").append(language.select("Источники для проверки:",
+                        "Тексеруге арналған дереккөздер:", "Sources to review:"));
+                headingAdded = true;
             }
+            answer.append("\n").append(url.get());
+            boolean expired = post.getFreshnessStatus() == TelegramChannelPostFreshnessStatus.EXPIRED
+                    || (post.getExpiresAt() != null && !post.getExpiresAt().isAfter(OffsetDateTime.now(clock)));
+            if (expired) answer.append(" — ").append(language.select("срок истёк", "мерзімі аяқталған", "expired"));
         }
-
-        if (!posts.isEmpty()) {
-            answer.append("<b>Найденные посты Telegram-канала:</b>\n");
-
-            for (int i = 0; i < Math.min(posts.size(), 5); i++) {
-                TelegramChannelPost post = posts.get(i);
-
-                answer.append("<b>").append(i + 1).append(". Объявление</b>\n");
-                answer.append(escapeTelegramHtml(shortenText(post.getText()))).append("\n");
-
-                String dateText = formatPostDate(post);
-
-                if (dateText != null) {
-                    answer.append("<i>Дата: ").append(dateText).append("</i>\n");
-                }
-
-                answer.append("\n");
-            }
-        }
-
-        return answer.toString().trim();
-    }
-
-    private String shortenText(String text) {
-        if (text == null || text.isBlank()) {
-            return "Текст объявления отсутствует.";
-        }
-
-        String normalizedText = text
-                .replaceAll("\\n{3,}", "\n\n")
-                .trim();
-
-        int maxLength = 900;
-
-        if (normalizedText.length() <= maxLength) {
-            return normalizedText;
-        }
-
-        return normalizedText.substring(0, maxLength).trim() + "...";
+        return answer.toString();
     }
 
     private String formatPostDate(TelegramChannelPost post) {
@@ -511,7 +596,7 @@ public class TelegramChannelPostAnswerService {
         }
 
         return dateTime
-                .atZoneSameInstant(ASTANA_ZONE_ID)
+                .atZoneSameInstant(clock.getZone())
                 .format(DATE_TIME_FORMATTER);
     }
 
@@ -766,6 +851,27 @@ public class TelegramChannelPostAnswerService {
                                 : post.getText()
                 )
                 .append("\n\n");
+        appendPublicationStatus(prompt, post);
+    }
+
+    private void appendPublicationStatus(StringBuilder prompt, TelegramChannelPost post) {
+        boolean expired = post.getFreshnessStatus() == TelegramChannelPostFreshnessStatus.EXPIRED
+                || (post.getExpiresAt() != null && !post.getExpiresAt().isAfter(OffsetDateTime.now(clock)));
+        prompt.append("Статус на текущую дату: ").append(expired ? "СРОК ИСТЁК" : post.getFreshnessStatus()).append("\n");
+        prompt.append("Исходная дата публикации: ").append(post.getPostedAt() != null ? post.getPostedAt() : post.getCreatedAt()).append("\n");
+        StructuredChannelAnswerBuilder.sourceUrl(post).ifPresent(url -> prompt.append("Ссылка на источник: ").append(url).append("\n"));
+    }
+
+    private String timelineHeading(String question, ChannelQueryAnalysis analysis) {
+        if (!analysis.requiresTimelineSearch()) return "";
+        AnswerLanguage language = AnswerLanguage.detect(question);
+        String freshness = switch (analysis.freshnessScope()) {
+            case CURRENT -> language.select("только текущие публикации", "тек қолданыстағы жарияланымдар", "current publications only");
+            case EXPIRED -> language.select("срок предложений истёк", "ұсыныстардың мерзімі аяқталған", "offers have expired");
+            case ALL -> language.select("текущие и истёкшие публикации", "қолданыстағы және мерзімі аяқталған жарияланымдар", "current and expired publications");
+        };
+        return language.select("Выборка по публикациям: ", "Жарияланымдар іріктемесі: ", "Publication selection: ")
+                + freshness + ".\n\n";
     }
 
     private boolean hasValidRelationPosts(TelegramChannelPostRelation relation) {

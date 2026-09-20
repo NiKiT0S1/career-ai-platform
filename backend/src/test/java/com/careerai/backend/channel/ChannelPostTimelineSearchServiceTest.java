@@ -15,6 +15,23 @@ class ChannelPostTimelineSearchServiceTest {
     private final ChannelQueryWindowResolver.Window window = new ChannelQueryWindowResolver.Window(now.minusDays(7), now.plusDays(1));
 
     @Test
+    void practiceDeadlineKnowledgeIncludesExpiredGenericNoticesButNotManualArchive() {
+        var repository = mock(ChannelPostTimelineRepository.class);
+        var relations = mock(TelegramChannelPostRelationExpansionService.class);
+        var expired = post(7); expired.setFreshnessStatus(TelegramChannelPostFreshnessStatus.EXPIRED);
+        var archived = post(8); archived.setArchived(true);
+        when(repository.findDeadlineKnowledge(anyCollection(), eq(true), any(), any(), any()))
+                .thenReturn(List.of(expired, archived));
+        when(relations.expand(any(), any())).thenAnswer(invocation -> invocation.getArgument(0));
+        var service = new ChannelPostTimelineSearchService(repository, new ChannelQueryWindowResolver(clock), relations, clock);
+        var analysis = new ChannelQueryAnalysis(ChannelSearchIntent.PRACTICE, "practice_deadline",
+                List.of(ChannelContentScope.PRACTICE), ChannelResultMode.RELEVANT, true, true, true);
+        assertEquals(List.of(expired), service.searchDeadlineKnowledge(analysis, 8).allPosts());
+        verify(repository).findDeadlineKnowledge(eq(List.of(TelegramChannelPostType.PRACTICE, TelegramChannelPostType.DEADLINE)),
+                eq(true), any(), any(), any());
+    }
+
+    @Test
     void allNeverOverridesManualArchiveOrInvalidDates() {
         var post = post(1);
         assertTrue(ChannelPostTimelineSearchService.matches(post, ChannelFreshnessScope.ALL, window, now));

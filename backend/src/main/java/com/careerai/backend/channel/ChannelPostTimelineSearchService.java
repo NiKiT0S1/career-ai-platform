@@ -46,6 +46,31 @@ public class ChannelPostTimelineSearchService {
         return relations.expand(new ChannelPostSearchResult(groups), ChannelPostTimelineSearchService::allowedHistoricalContext);
     }
 
+    /** Supplement a deadline question, without turning expired opportunities into current offers. */
+    public ChannelPostSearchResult searchDeadlineKnowledge(ChannelQueryAnalysis analysis, int totalLimit) {
+        Optional<ChannelQueryWindowResolver.Window> window = windows.resolve(analysis);
+        if (window.isEmpty() || !analysis.needsChannelPosts()) return ChannelPostSearchResult.empty();
+        List<ChannelContentScope> scopes = analysis.contentScopes().stream()
+                .filter(scope -> scope != ChannelContentScope.NONE).toList();
+        List<ChannelPostSearchGroup> groups = new ArrayList<>();
+        int remaining = Math.max(1, totalLimit);
+        for (int index = 0; index < scopes.size() && remaining > 0; index++) {
+            ChannelContentScope scope = scopes.get(index);
+            int limit = Math.max(1, remaining / (scopes.size() - index));
+            // A generic document-extension notice can be classified DEADLINE rather than PRACTICE.
+            List<TelegramChannelPostType> deadlineTypes = scope == ChannelContentScope.PRACTICE
+                    ? List.of(TelegramChannelPostType.PRACTICE, TelegramChannelPostType.DEADLINE) : types(scope);
+            List<TelegramChannelPost> posts = repository.findDeadlineKnowledge(deadlineTypes,
+                    scope == ChannelContentScope.PRACTICE, window.get().fromInclusive(), window.get().toExclusive(),
+                    PageRequest.of(0, limit)).stream()
+                    .filter(ChannelPostTimelineSearchService::allowedHistoricalContext)
+                    .filter(post -> window.get().contains(publicationDate(post))).limit(limit).toList();
+            groups.add(new ChannelPostSearchGroup(scope, posts));
+            remaining -= posts.size();
+        }
+        return relations.expand(new ChannelPostSearchResult(groups), ChannelPostTimelineSearchService::allowedHistoricalContext);
+    }
+
     static boolean matches(TelegramChannelPost post, ChannelFreshnessScope freshness,
                            ChannelQueryWindowResolver.Window window, OffsetDateTime now) {
         if (!allowedHistoricalContext(post) || !window.contains(publicationDate(post))) return false;

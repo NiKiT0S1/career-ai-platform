@@ -28,6 +28,40 @@ class SmartAnswerExecutionTest {
             new TelegramChannelPostSearchEligibility(Clock.systemUTC()), timeline, Clock.systemUTC());
 
     @Test
+    void deadlineQuestionReceivesExpiredExtensionEvenWithoutSemanticVectors() {
+        var analysis = new ChannelQueryAnalysis(ChannelSearchIntent.PRACTICE, "practice_documents",
+                List.of(ChannelContentScope.PRACTICE), ChannelResultMode.RELEVANT, true, true, true);
+        when(analyzer.analyze(anyString())).thenReturn(analysis);
+        when(hybrid.findRelevantPosts(any(), any(), anyInt())).thenReturn(ChannelPostSearchResult.empty());
+        var old = new TelegramChannelPost();
+        old.setId(3L); old.setText("Сдать документы до 25 августа 2026 года");
+        old.setFreshnessStatus(TelegramChannelPostFreshnessStatus.EXPIRED);
+        var extension = new TelegramChannelPost();
+        extension.setId(7L); extension.setText("Продлеваем срок сдачи документов до 7 сентября 2026 года");
+        extension.setFreshnessStatus(TelegramChannelPostFreshnessStatus.EXPIRED);
+        var relation = new TelegramChannelPostRelation();
+        relation.setSourcePost(extension); relation.setTargetPost(old);
+        relation.setRelationType(TelegramChannelPostRelationType.UPDATE);
+        when(timeline.searchDeadlineKnowledge(analysis, 8)).thenReturn(new ChannelPostSearchResult(
+                List.of(new ChannelPostSearchGroup(ChannelContentScope.PRACTICE, List.of(old, extension))), List.of(relation)));
+        when(llm.generateAnswer(anyString())).thenReturn(LlmResponse.success("Срок был 7 сентября и уже прошёл.", "test", "test", 0));
+        assertTrue(service.buildAnswerIfRelevant("Документы на практику до какого числа сдать?").orElseThrow().contains("7 сентября"));
+        verify(llm).generateAnswer(argThat(prompt -> prompt.contains("25 августа") && prompt.contains("7 сентября")
+                && prompt.contains("СРОК ИСТЁК") && prompt.contains("UPDATE")));
+    }
+
+    @Test
+    void incompleteDeadlineHistoryNeverProducesConfidentAnswer() {
+        var analysis = new ChannelQueryAnalysis(ChannelSearchIntent.DEADLINE, null,
+                List.of(ChannelContentScope.DEADLINES), ChannelResultMode.RELEVANT, true, false, true);
+        when(analyzer.analyze(anyString())).thenReturn(analysis);
+        when(hybrid.findRelevantPosts(any(), any(), anyInt())).thenReturn(ChannelPostSearchResult.empty());
+        when(timeline.searchDeadlineKnowledge(analysis, 8)).thenReturn(new ChannelPostSearchResult(List.of(), List.of(), false));
+        assertTrue(service.buildAnswerIfRelevant("Я ещё успеваю документы подать?").orElseThrow().contains("не могу подтвердить"));
+        verifyNoInteractions(llm);
+    }
+
+    @Test
     void greetingHasNoSecondLlmOrEmbeddingCall() {
         when(analyzer.analyze("Привет!")).thenReturn(new ChannelQueryAnalysis(ChannelSearchIntent.GENERAL_CHAT, null,
                 List.of(ChannelContentScope.NONE), ChannelResultMode.RELEVANT, false, false, false, "Привет!"));

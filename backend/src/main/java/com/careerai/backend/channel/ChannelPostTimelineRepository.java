@@ -10,6 +10,25 @@ import java.util.List;
 
 /** Explicit timeline queries have their own eligibility; normal search is unchanged. */
 public interface ChannelPostTimelineRepository extends JpaRepository<TelegramChannelPost, Long> {
+    /** Deadlines remain evidence after expiry, even when their semantic vector has been removed. */
+    @Query("""
+        select post from TelegramChannelPostMetadata metadata join metadata.post post
+        where metadata.extractionStatus = 'SUCCESS'
+          and (metadata.postType in :types or (:practice = true and metadata.relevantForPractice = true))
+          and (metadata.postType = 'DEADLINE' or length(trim(coalesce(metadata.deadlineText, ''))) > 0)
+          and post.archived = false
+          and post.freshnessStatus in ('ACTIVE', 'UNKNOWN', 'EXPIRED')
+          and post.text is not null and length(trim(post.text)) > 0
+          and coalesce(post.postedAt, post.createdAt) >= :fromInclusive
+          and coalesce(post.postedAt, post.createdAt) < :toExclusive
+        order by coalesce(post.postedAt, post.createdAt) desc, post.id desc
+        """)
+    List<TelegramChannelPost> findDeadlineKnowledge(@Param("types") Collection<TelegramChannelPostType> types,
+                                                   @Param("practice") boolean practice,
+                                                   @Param("fromInclusive") OffsetDateTime fromInclusive,
+                                                   @Param("toExclusive") OffsetDateTime toExclusive,
+                                                   Pageable pageable);
+
     @Query("""
         select post from TelegramChannelPostMetadata metadata join metadata.post post
         where metadata.extractionStatus = 'SUCCESS'

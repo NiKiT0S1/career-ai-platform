@@ -47,9 +47,29 @@ class BackendApplicationTests {
     @Autowired TelegramChannelPostRelationRootResolver relationRoots;
     @Autowired StandaloneRelationSelector relationSelector;
     @Autowired StandaloneRelationPolicy relationPolicy;
+    @Autowired ChannelPostTimelineRepository timeline;
     @Autowired PlatformTransactionManager transactions;
     @PersistenceContext EntityManager entityManager;
     final HttpClient http=HttpClient.newHttpClient();
+
+    @Test void expiredDeadlineKnowledgeSurvivesWithoutEmbeddingButRespectsArchive() {
+        long chat = -Math.abs(UUID.randomUUID().getMostSignificantBits());
+        long id = jdbc.queryForObject("""
+                INSERT INTO telegram_channel_posts(telegram_chat_id,telegram_message_id,text,posted_at,freshness_status,expires_at)
+                VALUES (?,1,'Документы принимаются до 7 сентября 2026 года','2026-07-07T10:00:00Z','EXPIRED','2026-09-08T00:00:00Z') RETURNING id
+                """, Long.class, chat);
+        try {
+            jdbc.update("INSERT INTO telegram_channel_post_metadata(post_id,post_type,deadline_text,extraction_status) VALUES (?,'DEADLINE','7 сентября 2026','SUCCESS')", id);
+            var from = java.time.OffsetDateTime.parse("2026-07-01T00:00:00Z");
+            var to = java.time.OffsetDateTime.parse("2026-08-01T00:00:00Z");
+            var types = List.of(TelegramChannelPostType.PRACTICE, TelegramChannelPostType.DEADLINE);
+            assertTrue(timeline.findDeadlineKnowledge(types, true, from, to, org.springframework.data.domain.PageRequest.of(0,100))
+                    .stream().anyMatch(post -> post.getId().equals(id)));
+            jdbc.update("UPDATE telegram_channel_posts SET is_archived=true, archived_at=now() WHERE id=?", id);
+            assertTrue(timeline.findDeadlineKnowledge(types, true, from, to, org.springframework.data.domain.PageRequest.of(0,100))
+                    .stream().noneMatch(post -> post.getId().equals(id)));
+        } finally { jdbc.update("DELETE FROM telegram_channel_posts WHERE id=?",id); }
+    }
 
     @Test void migrationAndEveryAdminListRunAgainstPostgres() throws Exception {
         assertEquals("15",jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1",String.class));

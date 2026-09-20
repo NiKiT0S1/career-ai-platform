@@ -177,7 +177,8 @@ public class TelegramChannelPostAnswerService {
         if (llmResponse != null && llmResponse.success()
                 && llmResponse.text() != null && !llmResponse.text().isBlank()) {
             return completed(AnswerExecutionMode.GENERATIVE_RAG,
-                    timelineHeading(userMessage, analysis) + llmResponse.text(), startedAt);
+                    timelineHeading(userMessage, analysis)
+                            + AnswerSourceFormatter.append(userMessage, llmResponse.text(), postSearchResult), startedAt);
         }
 
         log.warn(
@@ -312,10 +313,13 @@ public class TelegramChannelPostAnswerService {
             - не добавляй факты из своих общих знаний;
             - не выдумывай сроки, кабинеты, контакты, вакансии, компании, дедлайны, даты, форматы, требования или процедуры;
             - если информация есть в FAQ, используй её как стабильное официальное объяснение;
-            - если информация есть в Telegram-постах, используй её как актуальную информацию;
+            - сведения из Telegram-постов используй с учётом даты и статуса; сохранённый пост не доказывает актуальность предложения;
             - если вопрос состоит из нескольких частей, отвечай по каждой части отдельно;
             - если по одной части вопроса информация есть, а по другой нет, честно раздели это в ответе;
-            - если в переданных источниках нет ответа на конкретную часть вопроса, напиши: "В доступных источниках этой информации нет";
+            - если в переданной выборке нет ответа, напиши: "В найденных источниках не удалось подтвердить эту информацию";
+            - отсутствие факта в выборке не доказывает, что его нет во всём канале; не делай такого вывода;
+            - рядом с конкретной датой или изменённым условием указывай переданную ссылку на подтверждающий пост;
+            - используй только ссылки из источников, не выдумывай URL и номера сообщений;
             - если в обоих источниках нет подтверждённой информации по вопросу, посоветуй обратиться в Центр карьеры и трудоустройства;
             - не говори, что у тебя нет базы, если FAQ или посты были переданы;
             - не упоминай Platonus, деканат, кафедру, кураторов или другие системы, если их нет в источниках;
@@ -560,11 +564,11 @@ public class TelegramChannelPostAnswerService {
 
     private String buildNoConfirmedInformationAnswer(String userMessage) {
         return AnswerLanguage.detect(userMessage).select("""
-                У меня нет подтверждённой информации по этому вопросу в FAQ и в сохранённых постах Telegram-канала ЦКиТ.
+                В найденных источниках не удалось подтвердить ответ на этот вопрос. Это не означает, что объявления по теме не было.
 
                 Лучше обратиться в Центр карьеры и трудоустройства для уточнения.
-                """.trim(), "FAQ пен арнаның сақталған жарияланымдарында бұл сұраққа расталған ақпарат жоқ. Мансап және жұмыспен қамту орталығына хабарласыңыз.",
-                "There is no confirmed information on this question in the FAQ or saved channel posts. Please contact the Career and Employment Center.");
+                """.trim(), "Табылған дереккөздерден бұл сұрақтың жауабын растай алмадым. Бұл тақырып бойынша жарияланым болмағанын білдірмейді. Мансап және жұмыспен қамту орталығына хабарласыңыз.",
+                "I found no confirmed information answering this question in the retrieved sources. This does not mean that no announcement exists. Please contact the Career and Employment Center.");
     }
 
     private String buildProviderFailureAnswer(String question, ChannelQueryAnalysis analysis,

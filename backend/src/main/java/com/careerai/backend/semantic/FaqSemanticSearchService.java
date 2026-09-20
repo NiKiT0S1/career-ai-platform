@@ -24,17 +24,20 @@ public class FaqSemanticSearchService {
 //    private final EmbeddingProvider embeddingProvider;
     private final SemanticEmbeddingRepository embeddingRepository;
     private final FaqEntryService faqEntryService;
+    private final SemanticDocumentContent documentContent;
 
     public FaqSemanticSearchService(
             SemanticSearchProperties properties,
             EmbeddingProvider embeddingProvider,
             SemanticEmbeddingRepository embeddingRepository,
-            FaqEntryService faqEntryService
+            FaqEntryService faqEntryService,
+            SemanticDocumentContent documentContent
     ) {
         this.properties = properties;
 //        this.embeddingProvider = embeddingProvider;
         this.embeddingRepository = embeddingRepository;
         this.faqEntryService = faqEntryService;
+        this.documentContent = documentContent;
     }
 
     /**
@@ -50,6 +53,7 @@ public class FaqSemanticSearchService {
 
         if (queryEmbedding == null
                 || queryEmbedding.failed()
+                || !Objects.equals(queryEmbedding.model(), properties.getEmbeddingModel())
                 || queryEmbedding.values() == null
                 || queryEmbedding.values().length
                 != properties.getOutputDimensions()) {
@@ -91,7 +95,7 @@ public class FaqSemanticSearchService {
                     FaqEntry faqEntry =
                             activeFaqById.get(storedEmbedding.sourceId());
 
-                    if (faqEntry == null) {
+                    if (faqEntry == null || !Objects.equals(storedEmbedding.contentHash(), documentContent.faqHash(faqEntry))) {
                         return null;
                     }
 

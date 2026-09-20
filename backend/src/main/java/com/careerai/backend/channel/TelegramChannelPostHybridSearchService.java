@@ -82,18 +82,16 @@ public class TelegramChannelPostHybridSearchService {
 
         int remainingLimit = safeTotalLimit;
 
-        for (ChannelContentScope scope : scopes) {
+        for (int scopeIndex = 0; scopeIndex < scopes.size(); scopeIndex++) {
+            ChannelContentScope scope = scopes.get(scopeIndex);
             if (remainingLimit <= 0
                     || scope == ChannelContentScope.NONE) {
                 break;
             }
 
-            int scopeLimit = calculateScopeLimit(
-                    analysis,
-                    scopes.size(),
-                    remainingLimit,
-                    safeTotalLimit
-            );
+            // Reserve a fair share for every requested category, including ALL_MATCHING.
+            // Unused capacity from an empty category remains available to subsequent categories.
+            int scopeLimit = Math.max(1, remainingLimit / (scopes.size() - scopeIndex));
 
             List<TelegramChannelPost> structuredPosts =
                     structuredSearchService
@@ -158,26 +156,6 @@ public class TelegramChannelPostHybridSearchService {
         log.info("Hybrid channel search completed. scopes={}, mode={}, groups={}, selected={}, relations={}", analysis.contentScopes(), analysis.resultMode(), result.groups().size(), result.allPosts().size(), result.relations().size());
 
         return result;
-    }
-
-    private int calculateScopeLimit(
-            ChannelQueryAnalysis analysis,
-            int scopeCount,
-            int remainingLimit,
-            int totalLimit
-    ) {
-        if (analysis.resultMode()
-                == ChannelResultMode.ALL_MATCHING) {
-            return remainingLimit;
-        }
-
-        int balancedLimit =
-                Math.max(1, totalLimit / scopeCount);
-
-        return Math.min(
-                balancedLimit,
-                remainingLimit
-        );
     }
 
     private List<TelegramChannelPost> mergeScopeResults(

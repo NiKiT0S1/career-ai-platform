@@ -67,6 +67,7 @@ public class TelegramChannelPostMetadataService {
         metadata.setFormatText(null);
 
         metadata.setDeadlineText(null);
+        metadata.setEventDateText(null);
         metadata.setPracticeStartText(null);
         metadata.setPracticeEndText(null);
 

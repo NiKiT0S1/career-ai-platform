@@ -29,6 +29,10 @@ import java.time.OffsetDateTime;
 @Setter
 public class TelegramChannelPostMetadata {
 
+    @Version
+    @Column(name = "revision", nullable = false)
+    private long revision;
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -91,6 +95,10 @@ public class TelegramChannelPostMetadata {
      */
     @Column(name = "deadline_text", length = 500)
     private String deadlineText;
+
+    /** Exact quotation of when an event takes place, distinct from its registration deadline. */
+    @Column(name = "event_date_text", length = 500)
+    private String eventDateText;
 
     /**
      * Текстовая дата начала производственной практики.

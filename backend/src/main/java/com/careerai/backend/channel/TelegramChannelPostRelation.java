@@ -213,7 +213,8 @@ public class TelegramChannelPostRelation {
             name = "entity_version",
             nullable = false
     )
-    private Long entityVersion = 0L;
+    // Keep new entities unversioned until Hibernate persists them.
+    private Long entityVersion;
 
     @PrePersist
     void prePersist() {

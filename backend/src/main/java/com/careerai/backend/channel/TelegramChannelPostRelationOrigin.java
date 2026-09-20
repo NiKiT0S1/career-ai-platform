@@ -9,5 +9,6 @@ public enum TelegramChannelPostRelationOrigin {
     MANUAL,  // Связь создана вручную
     TELEGRAM_REPLY,  // Связь получена из Telegram reply_to_message
     ADMIN_CONFIRMED,  // Связь проверена и подтверждена администратором
-    SYSTEM_BACKFILL  // Связь восстановлена системной фоновой обработкой
+    SYSTEM_BACKFILL,  // Связь восстановлена системной фоновой обработкой
+    STANDALONE_INFERRED // Подтверждённое автоматическое предположение без Telegram reply
 }

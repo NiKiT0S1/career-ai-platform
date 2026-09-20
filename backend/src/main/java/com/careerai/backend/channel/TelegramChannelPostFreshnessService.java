@@ -1,8 +1,10 @@
 package com.careerai.backend.channel;
 
+import com.careerai.backend.semantic.ChannelPostEligibilityChangedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
@@ -30,17 +32,20 @@ public class TelegramChannelPostFreshnessService {
     private final TelegramChannelPostMetadataRepository metadataRepository;
     private final TelegramChannelPostFreshnessEvaluator evaluator;
     private final Clock clock;
+    private final ApplicationEventPublisher events;
 
     public TelegramChannelPostFreshnessService(
             TelegramChannelPostRepository postRepository,
             TelegramChannelPostMetadataRepository metadataRepository,
             TelegramChannelPostFreshnessEvaluator evaluator,
-            Clock clock
+            Clock clock,
+            ApplicationEventPublisher events
     ) {
         this.postRepository = postRepository;
         this.metadataRepository = metadataRepository;
         this.evaluator = evaluator;
         this.clock = clock;
+        this.events = events;
     }
 
     /**
@@ -88,6 +93,7 @@ public class TelegramChannelPostFreshnessService {
             boolean changed = applyEvaluation(post, evaluation, checkedAt);
 
             if (changed) {
+                events.publishEvent(new ChannelPostEligibilityChangedEvent(post.getId()));
                 log.info(
                         "Channel post freshness changed. "
                                 + "postId={}, telegramMessageId={}, "
@@ -152,6 +158,7 @@ public class TelegramChannelPostFreshnessService {
         boolean changed = applyEvaluation(post, evaluation, checkedAt);
 
         postRepository.save(post);
+        events.publishEvent(new ChannelPostEligibilityChangedEvent(postId));
 
         log.info(
                 "Channel post freshness recalculated. postId={}, telegramMessageId={}, changed={}, status={}, expiresAt={}, reason={}",

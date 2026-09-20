@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
+import com.careerai.backend.semantic.ChannelPostEligibilityChangedEvent;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -28,6 +30,8 @@ class TelegramChannelPostArchiveServiceTest {
 
     @Mock
     private TelegramChannelPostRepository postRepository;
+    @Mock
+    private ApplicationEventPublisher events;
 
     private TelegramChannelPostArchiveService archiveService;
 
@@ -41,7 +45,8 @@ class TelegramChannelPostArchiveServiceTest {
         archiveService =
                 new TelegramChannelPostArchiveService(
                         postRepository,
-                        clock
+                        clock,
+                        events
                 );
     }
 
@@ -87,6 +92,7 @@ class TelegramChannelPostArchiveServiceTest {
         );
 
         verify(postRepository).save(post);
+        verify(events).publishEvent(new ChannelPostEligibilityChangedEvent(POST_ID));
     }
 
     @Test
@@ -124,6 +130,7 @@ class TelegramChannelPostArchiveServiceTest {
 
         verify(postRepository, never())
                 .save(any());
+        verifyNoInteractions(events);
     }
 
     @Test
@@ -154,6 +161,7 @@ class TelegramChannelPostArchiveServiceTest {
         assertNull(post.getArchiveReason());
 
         verify(postRepository).save(post);
+        verify(events).publishEvent(new ChannelPostEligibilityChangedEvent(POST_ID));
     }
 
     @Test

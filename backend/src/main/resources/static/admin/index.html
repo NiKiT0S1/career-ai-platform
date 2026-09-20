@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light dark"><title>CareerAI · Центр карьеры</title>
+  <link rel="stylesheet" href="/admin/admin.css">
+  <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
+  <script src="/admin/admin.js" defer></script>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <a class="brand" href="/admin/"><span class="brand-mark">C<span>↗</span></span><span>Career<span class="brand-ai">AI</span><small>ЦЕНТР КАРЬЕРЫ · AITU</small></span></a>
+    <div class="workspace"><span class="workspace-icon">А</span><span>Панель центра карьеры<small>Рабочее пространство</small></span><span class="dot"></span></div>
+    <p class="nav-label">УПРАВЛЕНИЕ</p>
+    <nav aria-label="Разделы панели">
+      <button data-view="posts" class="nav-item active"><span>▤</span> Публикации <span class="nav-count" id="nav-count">—</span></button>
+      <button data-view="faqs" class="nav-item"><span>?</span> База знаний</button>
+      <button data-view="relations" class="nav-item"><span>↗</span> Связи публикаций</button>
+      <button data-view="candidates" class="nav-item"><span>◇</span> На проверку</button>
+      <button data-view="jobs" class="nav-item"><span>↻</span> Обслуживание</button>
+      <button data-view="audit" class="nav-item"><span>◷</span> Журнал действий</button>
+    </nav>
+    <div class="sidebar-note"><span>✦</span><strong>Знания, которым доверяют</strong><p>Проверяйте публикации и уточнения, чтобы студенты получали актуальные ответы.</p></div>
+    <div class="profile"><span class="avatar" id="avatar">C</span><span id="profile-name">Вход через Telegram<small>Доступ для администраторов</small></span></div>
+  </aside>
+  <main>
+    <header class="topbar"><span>Центр карьеры <span class="slash">/</span> <strong id="breadcrumb">Публикации</strong></span><span class="connection"><i></i><span id="connection-label">Подключение</span></span></header>
+    <section id="auth-state" class="auth-card" hidden><span class="auth-symbol">↗</span><h1>Откройте панель из Telegram</h1><p id="auth-message">Доступ предоставляется сотрудникам центра карьеры. Запустите команду /admin в личном чате с ботом.</p><button class="btn primary" id="retry-auth">Повторить подключение</button></section>
+    <div id="workspace-content">
+      <section class="page-heading"><div><p class="eyebrow">CAREERAI / РАБОЧЕЕ ПРОСТРАНСТВО</p><h1 id="page-title">Публикации канала</h1><p id="page-description">Актуальные возможности для студентов — под вашим контролем.</p></div><button class="btn" id="refresh">↻ <span>Обновить</span></button></section>
+      <section class="stats" aria-label="Сводка"><article><span>Всего публикаций</span><strong id="stat-posts">—</strong><small>В базе CareerAI</small></article><article><span>Актуальны сейчас</span><strong id="stat-current">—</strong><small><i class="small-dot"></i> Доступны студентам</small></article><article><span>Связи на проверке</span><strong id="stat-review">—</strong><small>Требуют внимания</small></article><article><span>Ответы в базе знаний</span><strong id="stat-faq">—</strong><small>Проверенные FAQ</small></article></section>
+      <section class="content-card">
+        <div class="section-bar"><div><h2 id="section-title">Все публикации</h2><span id="result-count" class="muted">Загрузка…</span></div><div id="view-actions"></div></div>
+        <form id="filters" class="filters"><label class="search-field"><span>⌕</span><input id="search" name="q" type="search" placeholder="Найти публикацию…" maxlength="300" aria-label="Поиск"></label><select id="status-filter" aria-label="Статус"><option value="ALL">Все статусы</option><option value="CURRENT">Актуальные</option><option value="EXPIRED">Срок истёк</option><option value="ARCHIVED">Архив</option><option value="UNKNOWN">Срок не определён</option><option value="INVALID">Проверить дату</option></select><select id="type-filter" aria-label="Тип публикации"><option value="ALL">Все категории</option><option value="VACANCY">Вакансии</option><option value="EVENT">Мероприятия</option><option value="PRACTICE">Практика</option><option value="DEADLINE">Дедлайны</option><option value="ANNOUNCEMENT">Объявления</option><option value="OTHER">Другое</option></select><label class="date-field">С <input id="date-from" type="date" aria-label="Дата начала"></label><label class="date-field">По <input id="date-to" type="date" aria-label="Дата окончания"></label><button class="btn compact" type="submit">Найти</button></form>
+        <div id="content" aria-live="polite"><div class="empty">Загружаем рабочее пространство…</div></div>
+        <footer class="pagination"><span id="page-label">Страница 1</span><div><button class="btn compact" id="prev" disabled>← Назад</button><button class="btn compact" id="next" disabled>Далее →</button></div></footer>
+      </section>
+      <footer class="page-footer"><span>CareerAI · Центр карьеры и трудоустройства</span><span>Изменения сохраняются в журнале</span></footer>
+    </div>
+  </main>
+</div>
+<dialog id="detail-dialog"><div class="dialog-heading"><div><p class="eyebrow" id="dialog-eyebrow">ПУБЛИКАЦИЯ</p><h2 id="dialog-title">Подробности</h2></div><button class="icon-btn" id="close-dialog" aria-label="Закрыть">×</button></div><div id="dialog-content"></div></dialog>
+<div id="toast" role="status" hidden></div>
+</body></html>

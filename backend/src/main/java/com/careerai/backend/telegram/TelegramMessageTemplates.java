@@ -47,6 +47,8 @@ public final class TelegramMessageTemplates {
             /help — посмотреть помощь
             /about — узнать о боте
             /faq — открыть частые вопросы ЦКиТ
+            /myid — показать свой Telegram ID
+            /admin — панель управления для сотрудников ЦКиТ
             """;
     }
 

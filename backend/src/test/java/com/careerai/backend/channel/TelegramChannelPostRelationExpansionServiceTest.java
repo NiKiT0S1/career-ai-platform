@@ -9,6 +9,8 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -57,7 +59,6 @@ class TelegramChannelPostRelationExpansionServiceTest {
                         )
         ).thenReturn(List.of(relation));
 
-        when(searchEligibility.isSearchable(sourcePost)).thenReturn(true);
 
         TelegramChannelPostRelationExpansionService service =
                 new TelegramChannelPostRelationExpansionService(
@@ -130,7 +131,6 @@ class TelegramChannelPostRelationExpansionServiceTest {
                         )
         ).thenReturn(List.of(relation));
 
-        when(searchEligibility.isSearchable(sourcePost)).thenReturn(false);
 
         TelegramChannelPostRelationExpansionService service =
                 new TelegramChannelPostRelationExpansionService(
@@ -186,6 +186,101 @@ class TelegramChannelPostRelationExpansionServiceTest {
         );
 
         verifyNoInteractions(relationRepository, searchEligibility);
+    }
+
+    @Test
+    void explicitHistoricalExpansionIncludesExpiredCorrectionButNeverArchivedOne() {
+        var original = createPost(TARGET_POST_ID, OffsetDateTime.parse("2026-07-16T10:00:00+05:00"), false);
+        original.setFreshnessStatus(TelegramChannelPostFreshnessStatus.EXPIRED);
+        var correction = createPost(SOURCE_POST_ID, OffsetDateTime.parse("2026-07-17T10:00:00+05:00"), false);
+        correction.setFreshnessStatus(TelegramChannelPostFreshnessStatus.EXPIRED);
+        var relation = createRelation(correction, original);
+        when(relationRepository.findConnectedToPostIds(List.of(TARGET_POST_ID))).thenReturn(List.of(relation));
+        var service = new TelegramChannelPostRelationExpansionService(relationRepository, searchEligibility);
+        var initial = new ChannelPostSearchResult(List.of(new ChannelPostSearchGroup(ChannelContentScope.EVENTS, List.of(original))));
+        var result = service.expand(initial, ChannelPostTimelineSearchService::allowedHistoricalContext);
+        assertEquals(2, result.allPosts().size());
+        assertEquals(1, result.relations().size());
+        correction.setArchived(true);
+        result = service.expand(initial, ChannelPostTimelineSearchService::allowedHistoricalContext);
+        assertEquals(1, result.allPosts().size());
+        assertEquals(0, result.relations().size());
+        verifyNoInteractions(searchEligibility);
+    }
+
+    @Test
+    void omissionOfOlderCancellationMarksChainIncompleteEvenWhenLatestUpdatesFit() {
+        var original = createPost(TARGET_POST_ID, OffsetDateTime.parse("2026-07-01T10:00:00+05:00"), false);
+        var relations = java.util.stream.IntStream.rangeClosed(1, 5).mapToObj(index -> {
+            var source = createPost(100L + index, original.getPostedAt().plusDays(index), false);
+            source.setText(index == 1 ? "Раздача подарков отменена" : "Обновлены детали мероприятия " + index);
+            var relation = createRelation(source, original);
+            relation.setRelationType(index == 1 ? TelegramChannelPostRelationType.CANCELLATION
+                    : TelegramChannelPostRelationType.UPDATE);
+            return relation;
+        }).toList();
+        when(relationRepository.findConnectedToPostIds(List.of(TARGET_POST_ID))).thenReturn(relations);
+        var service = new TelegramChannelPostRelationExpansionService(relationRepository, searchEligibility);
+        var initial = new ChannelPostSearchResult(List.of(new ChannelPostSearchGroup(ChannelContentScope.EVENTS, List.of(original))));
+        var result = service.expand(initial);
+        assertEquals(5, result.allPosts().size());
+        assertEquals(4, result.relations().size());
+        assertFalse(result.relationContextComplete());
+        assertFalse(result.allPosts().stream().anyMatch(post -> post.getId().equals(101L)));
+        assertTrue(result.allPosts().stream().anyMatch(post -> post.getId().equals(105L)));
+    }
+
+    @Test
+    void retainsExpiredOriginalWhenCurrentTimelessReplyWasRetrieved() {
+        var original = createPost(10, OffsetDateTime.parse("2026-07-10T10:00:00+05:00"), false);
+        original.setText("10 августа 2026 состоится мероприятие");
+        original.setFreshnessStatus(TelegramChannelPostFreshnessStatus.EXPIRED);
+        var reply = createPost(15, original.getPostedAt().plusMinutes(2), false);
+        reply.setText("Начало в 12:00, конец в 15:00, Open Space");
+        reply.setReplyToTelegramMessageId(10L);
+        when(relationRepository.findConnectedToPostIds(List.of(15L)))
+                .thenReturn(List.of(createRelation(reply, original)));
+        var result = new TelegramChannelPostRelationExpansionService(relationRepository, searchEligibility)
+                .expand(new ChannelPostSearchResult(List.of(new ChannelPostSearchGroup(ChannelContentScope.EVENTS, List.of(reply)))));
+        assertEquals(2, result.allPosts().size());
+        assertEquals(1, result.relations().size());
+        assertTrue(result.relationContextComplete());
+        assertTrue(result.allPosts().contains(original));
+    }
+
+    @Test
+    void archivedRequiredOriginalMakesReplyContextIncomplete() {
+        var original = createPost(10, OffsetDateTime.parse("2026-07-10T10:00:00+05:00"), true);
+        var reply = createPost(15, original.getPostedAt().plusMinutes(2), false);
+        when(relationRepository.findConnectedToPostIds(List.of(15L)))
+                .thenReturn(List.of(createRelation(reply, original)));
+        var result = new TelegramChannelPostRelationExpansionService(relationRepository, searchEligibility)
+                .expand(new ChannelPostSearchResult(List.of(new ChannelPostSearchGroup(ChannelContentScope.EVENTS, List.of(reply)))));
+        assertEquals(1, result.allPosts().size());
+        assertFalse(result.relationContextComplete());
+    }
+
+    @Test
+    void replyWithoutResolvedRelationIsNotStandaloneEventEvidence() {
+        var reply = createPost(15, OffsetDateTime.parse("2026-07-10T10:00:00+05:00"), false);
+        reply.setReplyToTelegramMessageId(10L);
+        var result = new TelegramChannelPostRelationExpansionService(relationRepository, searchEligibility)
+                .expand(new ChannelPostSearchResult(List.of(new ChannelPostSearchGroup(ChannelContentScope.EVENTS, List.of(reply)))));
+        assertFalse(result.relationContextComplete());
+    }
+
+    @Test
+    void followsReplyToReplyToRecoverOriginalDate() {
+        var original = createPost(10, OffsetDateTime.parse("2026-07-10T10:00:00+05:00"), false);
+        var update = createPost(12, original.getPostedAt().plusMinutes(2), false);
+        var reply = createPost(15, original.getPostedAt().plusMinutes(4), false);
+        when(relationRepository.findConnectedToPostIds(List.of(15L))).thenReturn(List.of(createRelation(reply, update)));
+        when(relationRepository.findConnectedToPostIds(List.of(12L))).thenReturn(List.of(createRelation(update, original)));
+        var result = new TelegramChannelPostRelationExpansionService(relationRepository, searchEligibility)
+                .expand(new ChannelPostSearchResult(List.of(new ChannelPostSearchGroup(ChannelContentScope.EVENTS, List.of(reply)))));
+        assertEquals(3, result.allPosts().size());
+        assertEquals(2, result.relations().size());
+        assertTrue(result.relationContextComplete());
     }
 
     private TelegramChannelPost createPost(

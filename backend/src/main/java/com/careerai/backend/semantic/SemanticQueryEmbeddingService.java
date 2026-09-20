@@ -1,10 +1,16 @@
 package com.careerai.backend.semantic;
 
+import com.careerai.backend.answer.AnswerCacheProperties;
+import com.careerai.backend.answer.BoundedQueryCache;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.Optional;
+import java.time.Clock;
+import java.util.Arrays;
+import java.util.Objects;
 
 /**
  * Создаёт единый embedding пользовательского запроса.
@@ -23,13 +29,17 @@ public class SemanticQueryEmbeddingService {
 
     private final SemanticSearchProperties properties;
     private final EmbeddingProvider embeddingProvider;
+    private final BoundedQueryCache<EmbeddingResult> cache;
 
     public SemanticQueryEmbeddingService(
             SemanticSearchProperties properties,
-            EmbeddingProvider embeddingProvider
+            EmbeddingProvider embeddingProvider,
+            AnswerCacheProperties cacheProperties,
+            Clock clock
     ) {
         this.properties = properties;
         this.embeddingProvider = embeddingProvider;
+        this.cache = new BoundedQueryCache<>(cacheProperties.embeddingSize(), cacheProperties.embeddingTtlSeconds(), clock);
     }
 
     /**
@@ -47,31 +57,50 @@ public class SemanticQueryEmbeddingService {
             return Optional.empty();
         }
 
-        EmbeddingResult result =
-                embeddingProvider.embedQuery(userMessage);
+        String namespace = "embedding-v1|" + properties.getEmbeddingModel() + '|' + properties.getOutputDimensions();
+        return Optional.ofNullable(cache.get(namespace, userMessage, () -> embedUncached(userMessage)))
+                .map(this::copy);
+    }
 
-        if (result.failed()) {
-            log.warn(
-                    "Shared query embedding failed. error={}",
-                    result.errorMessage()
-            );
+    public void invalidateAll() {
+        cache.invalidateAll();
+    }
 
-            return Optional.empty();
+    private EmbeddingResult embedUncached(String userMessage) {
+        EmbeddingResult result;
+        try {
+            result = embeddingProvider.embedQuery(userMessage);
+        } catch (RuntimeException exception) {
+            log.warn("Query embedding unavailable. type={}", exception.getClass().getSimpleName());
+            return null;
         }
 
-        if (result.values() == null
+        if (result == null || result.failed()) {
+            log.warn(
+                    "Shared query embedding failed. error={}",
+                    result == null ? "empty provider response" : result.errorMessage()
+            );
+
+            return null;
+        }
+
+        if (!Objects.equals(result.model(), properties.getEmbeddingModel())
+                || result.values() == null
                 || result.values().length
-                != properties.getOutputDimensions()) {
+                != properties.getOutputDimensions()
+                || result.values().length == 0
+                || Arrays.stream(result.values()).anyMatch(value -> !Double.isFinite(value))
+                || Arrays.stream(result.values()).allMatch(value -> value == 0.0)) {
 
             log.warn(
-                    "Shared query embedding has unexpected dimensions. expected={}, actual={}",
+                    "Shared query embedding has invalid model, dimensions or vector. expectedDimensions={}, actualDimensions={}",
                     properties.getOutputDimensions(),
                     result.values() == null
                             ? 0
                             : result.values().length
             );
 
-            return Optional.empty();
+            return null;
         }
 
         log.info(
@@ -81,6 +110,10 @@ public class SemanticQueryEmbeddingService {
                 result.elapsedMillis()
         );
 
-        return Optional.of(result);
+        return copy(result);
+    }
+
+    private EmbeddingResult copy(EmbeddingResult result) {
+        return EmbeddingResult.success(result.values().clone(), result.model(), result.elapsedMillis());
     }
 }

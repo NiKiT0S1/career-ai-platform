@@ -5,6 +5,7 @@ import com.careerai.backend.answer.*;
 import com.careerai.backend.faq.*;
 import com.careerai.backend.semantic.*;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import java.time.Clock;
@@ -23,9 +24,45 @@ class SmartAnswerExecutionTest {
     private final SemanticQueryEmbeddingService embeddings = mock(SemanticQueryEmbeddingService.class);
     private final StructuredChannelAnswerBuilder builder = mock(StructuredChannelAnswerBuilder.class);
     private final ChannelPostTimelineSearchService timeline = mock(ChannelPostTimelineSearchService.class);
+    private final EventTemporalEvidenceService temporal = mock(EventTemporalEvidenceService.class);
+    private final EventContextFilter eventFilter = mock(EventContextFilter.class);
+    private final AnswerCalendarGrounding grounding = new AnswerCalendarGrounding(
+            new MultilingualDateTextParser(new MultilingualMonthDictionary(), new MultilingualDateBoundaryDetector()), Clock.systemUTC());
     private final TelegramChannelPostAnswerService service = new TelegramChannelPostAnswerService(posts, analyzer, llm,
             hybrid, faq, faqSearch, embeddings, new AnswerExecutionPlanner(), builder,
-            new TelegramChannelPostSearchEligibility(Clock.systemUTC()), timeline, Clock.systemUTC());
+            new TelegramChannelPostSearchEligibility(Clock.systemUTC()), timeline, Clock.systemUTC(), temporal, eventFilter, grounding);
+
+    @BeforeEach void preserveMockSearchContext() {
+        when(eventFilter.filter(any(), any())).thenAnswer(invocation -> invocation.getArgument(0));
+    }
+
+    @Test
+    void generatedPublicationDateCannotReplaceEventDate() {
+        var analysis = new ChannelQueryAnalysis(ChannelSearchIntent.GENERAL_UPDATES, null,
+                List.of(ChannelContentScope.EVENTS), ChannelResultMode.RELEVANT, true, false, false);
+        when(analyzer.analyze(anyString())).thenReturn(analysis);
+        var post = new TelegramChannelPost();
+        post.setId(9L); post.setTelegramMessageId(9L); post.setChannelUsername("career_test");
+        post.setPostedAt(java.time.OffsetDateTime.parse("2026-07-10T10:00:00Z"));
+        post.setText("10 августа 2026 года состоится мероприятие в Open Space.");
+        when(hybrid.findRelevantPosts(any(), any(), anyInt())).thenReturn(new ChannelPostSearchResult(
+                List.of(new ChannelPostSearchGroup(ChannelContentScope.EVENTS, List.of(post)))));
+        when(llm.generateAnswer(anyString())).thenReturn(LlmResponse.success("Мероприятие состоится 10 июля 2026 года.", "test", "test", 0));
+        String answer = service.buildAnswerIfRelevant("Что известно о мероприятии Open Space?").orElseThrow();
+        assertTrue(answer.contains("10 августа"), answer);
+        assertFalse(answer.contains("10 июля"), answer);
+        assertTrue(answer.contains("https://t.me/career_test/9"), answer);
+    }
+
+    @Test
+    void incompleteEventRangeIsRejectedBeforeRetrieval() {
+        when(analyzer.analyze(anyString())).thenReturn(new ChannelQueryAnalysis(ChannelSearchIntent.GENERAL_UPDATES, null,
+                List.of(ChannelContentScope.EVENTS), ChannelResultMode.ALL_MATCHING, true, false, false, null,
+                ChannelTimeScope.ANY_TIME, ChannelFreshnessScope.CURRENT, java.time.LocalDate.of(2026,9,1), null,
+                java.time.LocalDate.of(2026,9,1), null));
+        assertTrue(service.buildAnswerIfRelevant("Мероприятия за период").orElseThrow().contains("корректный период"));
+        verifyNoInteractions(llm, hybrid, embeddings, timeline);
+    }
 
     @Test
     void deadlineQuestionReceivesExpiredExtensionEvenWithoutSemanticVectors() {
@@ -42,7 +79,7 @@ class SmartAnswerExecutionTest {
         var relation = new TelegramChannelPostRelation();
         relation.setSourcePost(extension); relation.setTargetPost(old);
         relation.setRelationType(TelegramChannelPostRelationType.UPDATE);
-        when(timeline.searchDeadlineKnowledge(analysis, 8)).thenReturn(new ChannelPostSearchResult(
+        when(timeline.searchDeadlineKnowledge(eq(analysis), eq(8), anyString())).thenReturn(new ChannelPostSearchResult(
                 List.of(new ChannelPostSearchGroup(ChannelContentScope.PRACTICE, List.of(old, extension))), List.of(relation)));
         when(llm.generateAnswer(anyString())).thenReturn(LlmResponse.success("Срок был 7 сентября и уже прошёл.", "test", "test", 0));
         assertTrue(service.buildAnswerIfRelevant("Документы на практику до какого числа сдать?").orElseThrow().contains("7 сентября"));
@@ -56,7 +93,7 @@ class SmartAnswerExecutionTest {
                 List.of(ChannelContentScope.DEADLINES), ChannelResultMode.RELEVANT, true, false, true);
         when(analyzer.analyze(anyString())).thenReturn(analysis);
         when(hybrid.findRelevantPosts(any(), any(), anyInt())).thenReturn(ChannelPostSearchResult.empty());
-        when(timeline.searchDeadlineKnowledge(analysis, 8)).thenReturn(new ChannelPostSearchResult(List.of(), List.of(), false));
+        when(timeline.searchDeadlineKnowledge(eq(analysis), eq(8), anyString())).thenReturn(new ChannelPostSearchResult(List.of(), List.of(), false));
         assertTrue(service.buildAnswerIfRelevant("Я ещё успеваю документы подать?").orElseThrow().contains("не могу подтвердить"));
         verifyNoInteractions(llm);
     }
@@ -135,7 +172,7 @@ class SmartAnswerExecutionTest {
                 ChannelResultMode.ALL_MATCHING, true, false, false, null,
                 ChannelTimeScope.YESTERDAY, ChannelFreshnessScope.EXPIRED, null, null);
         when(analyzer.analyze(anyString())).thenReturn(analysis);
-        when(timeline.search(analysis, 30)).thenReturn(ChannelPostSearchResult.empty());
+        when(timeline.search(eq(analysis), eq(30), anyString())).thenReturn(ChannelPostSearchResult.empty());
         assertTrue(service.buildAnswerIfRelevant("Expired vacancies published yesterday").isPresent());
         verifyNoInteractions(hybrid, posts, embeddings, llm, builder);
     }
@@ -150,7 +187,7 @@ class SmartAnswerExecutionTest {
         expired.setText("Old vacancy");
         expired.setFreshnessStatus(TelegramChannelPostFreshnessStatus.EXPIRED);
         when(analyzer.analyze(anyString())).thenReturn(analysis);
-        when(timeline.search(analysis, 8)).thenReturn(new ChannelPostSearchResult(
+        when(timeline.search(eq(analysis), eq(8), anyString())).thenReturn(new ChannelPostSearchResult(
                 List.of(new ChannelPostSearchGroup(ChannelContentScope.VACANCIES, List.of(expired)))));
         when(llm.generateAnswer(anyString())).thenReturn(LlmResponse.success("The vacancy has expired.", "test", "test", 0));
         assertTrue(service.buildAnswerIfRelevant("Show expired vacancies").orElseThrow().contains("offers have expired"));
@@ -169,7 +206,7 @@ class SmartAnswerExecutionTest {
         original.setChannelUsername("career_channel");
         original.setTelegramMessageId(1L);
         when(analyzer.analyze(anyString())).thenReturn(analysis);
-        when(timeline.search(analysis, 8)).thenReturn(new ChannelPostSearchResult(
+        when(timeline.search(eq(analysis), eq(8), anyString())).thenReturn(new ChannelPostSearchResult(
                 List.of(new ChannelPostSearchGroup(ChannelContentScope.EVENTS, List.of(original))), List.of(), false));
         String answer = service.buildAnswerIfRelevant("Were there gifts at this event?").orElseThrow();
         assertTrue(answer.contains("cannot confirm"));
@@ -209,7 +246,7 @@ class SmartAnswerExecutionTest {
         expired.setText("Apply today for this position!");
         expired.setFreshnessStatus(TelegramChannelPostFreshnessStatus.EXPIRED);
         when(analyzer.analyze(question)).thenReturn(analysis);
-        when(timeline.search(analysis, 8)).thenReturn(new ChannelPostSearchResult(
+        when(timeline.search(eq(analysis), eq(8), anyString())).thenReturn(new ChannelPostSearchResult(
                 List.of(new ChannelPostSearchGroup(ChannelContentScope.VACANCIES, List.of(expired)))));
         when(llm.generateAnswer(anyString())).thenReturn(LlmResponse.failure("outage", "test", "test", LlmErrorType.SERVICE_UNAVAILABLE, 0));
         String answer = service.buildAnswerIfRelevant(question).orElseThrow();

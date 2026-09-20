@@ -10,6 +10,7 @@ import tools.jackson.databind.JsonNode;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Objects;
 
 /**
  * Сервис для сохранения Telegram-постов из канала ЦКиТа.
@@ -63,13 +64,27 @@ public class TelegramChannelPostService {
                 .findByTelegramChatIdAndTelegramMessageId(telegramChatId, telegramMessageId)
                 .orElseGet(TelegramChannelPost::new);
 
+        OffsetDateTime incomingEdit = extractTelegramDate(message, "edit_date");
+        if (edited && post.getEditedAt() != null && incomingEdit != null
+                && incomingEdit.isBefore(post.getEditedAt())) {
+            log.info("Ignoring superseded channel edit. postId={}", post.getId());
+            return;
+        }
+        boolean contentChanged = post.getId() != null && !Objects.equals(post.getText(), text);
+        if (!edited && post.getEditedAt() != null && contentChanged) {
+            log.info("Ignoring original channel update received after an edit. postId={}", post.getId());
+            return;
+        }
+        boolean resetMetadata = edited || contentChanged;
+
         post.setTelegramChatId(telegramChatId);
         post.setTelegramMessageId(telegramMessageId);
         post.setChannelTitle(extractNullableText(chat, "title"));
         post.setChannelUsername(extractNullableText(chat, "username"));
         post.setText(text);
         post.setRawUpdateJson(rawUpdateJson);
-        post.setPostedAt(extractTelegramDate(message, "date"));
+        OffsetDateTime publicationDate = extractTelegramDate(message, "date");
+        if (post.getPostedAt() == null && publicationDate != null) post.setPostedAt(publicationDate);
 
         /*
          * Reply-связь Telegram является неизменяемой.
@@ -83,12 +98,21 @@ public class TelegramChannelPostService {
         }
 
         if (edited) {
-            post.setEditedAt(extractTelegramDate(message, "edit_date"));
+            if (incomingEdit != null) post.setEditedAt(incomingEdit);
+        }
+        if (resetMetadata) {
+            // Old expiry must not hide a newly postponed event while extraction is pending.
+            // Conversely it must not certify a revised date as still current.
+            post.setFreshnessStatus(TelegramChannelPostFreshnessStatus.UNKNOWN);
+            post.setExpiresAt(null);
+            post.setFreshnessReason("Текст обновлён; даты требуют повторной проверки");
+            post.setFreshnessCheckedAt(null);
+            if (contentChanged) post.clearDateConfirmation();
         }
 
         TelegramChannelPost savedPost = repository.save(post);
 
-        metadataService.createOrResetMetadata(savedPost, edited);
+        metadataService.createOrResetMetadata(savedPost, resetMetadata);
 
         eventPublisher.publishEvent(
                 new TelegramChannelPostSavedEvent(savedPost.getId())

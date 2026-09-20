@@ -37,12 +37,16 @@ public class TelegramChannelPostFreshnessEvaluator {
             return unknown("Telegram-пост отсутствует");
         }
 
-        if (post.hasCurrentDateConfirmation()) {
+        boolean currentConfirmation = post.hasCurrentDateConfirmation();
+        boolean eventWithDifferentDatePurpose = metadata != null
+                && metadata.getPostType() == TelegramChannelPostType.EVENT
+                && post.getConfirmedDatePurpose() != ChannelPostDatePurpose.EVENT_DATE;
+        if (currentConfirmation && !eventWithDifferentDatePurpose) {
             return evaluateParsedDate(post.getConfirmedDate(), post.getConfirmedDateBoundary(),
                     "подтверждено администратором: " + describePurpose(post.getConfirmedDatePurpose()));
         }
 
-        if (post.getConfirmedDate() != null) {
+        if (post.getConfirmedDate() != null && !currentConfirmation) {
             return unknown("Исходная публикация изменена после подтверждения даты; требуется повторная проверка администратора");
         }
 
@@ -70,12 +74,16 @@ public class TelegramChannelPostFreshnessEvaluator {
                     "дедлайн вакансии"
             );
 
-            case EVENT -> evaluateDatedContent(
-                    null,
-                    post.getText(),
-                    referenceDate,
-                    "дата мероприятия"
-            );
+            case EVENT -> {
+                if (metadata.getEventDateText() == null && metadata.getDeadlineText() != null) {
+                    yield unknown("Известен срок регистрации, но дата проведения мероприятия не подтверждена");
+                }
+                String eventText = metadata.getEventDateText() != null ? metadata.getEventDateText() : post.getText();
+                if (EventTemporalEvidenceService.containsUnresolvedRange(dateParser, eventText)) {
+                    yield unknown("Указан период или несколько дат мероприятия; границы проведения требуют уточнения");
+                }
+                yield evaluateDatedContent(metadata.getEventDateText(), post.getText(), referenceDate, "дата мероприятия");
+            }
 
             case PRACTICE -> evaluateDatedContent(
                     joinText(

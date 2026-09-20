@@ -100,6 +100,30 @@ class TelegramChannelPostFreshnessEvaluatorTest {
         assertEquals(TelegramChannelPostFreshnessStatus.UNKNOWN,evaluator.evaluate(post,metadata).status());
     }
 
+    @Test
+    void confirmedRegistrationDeadlineDoesNotExpireFutureEvent() {
+        post.setText("Мероприятие 15 ноября 2026. Регистрация до 6 сентября.");
+        metadata.setPostType(TelegramChannelPostType.EVENT);metadata.setEventDateText("15 ноября 2026");
+        metadata.setDeadlineText("6 сентября");confirm(LocalDate.of(2026,9,6));
+        var result=evaluator.evaluate(post,metadata);
+        assertEquals(TelegramChannelPostFreshnessStatus.ACTIVE,result.status());
+        assertEquals(OffsetDateTime.parse("2026-11-16T00:00:00+05:00"),result.expiresAt());
+        var evidence=new EventTemporalEvidenceService(null,
+                new MultilingualDateTextParser(new MultilingualMonthDictionary(),new MultilingualDateBoundaryDetector()),
+                Clock.fixed(Instant.parse("2026-09-07T13:00:00Z"),ZoneId.of("Asia/Almaty"))).inspect(post,metadata);
+        assertEquals(LocalDate.of(2026,9,6),evidence.deadlineDate().date());
+        assertEquals(LocalDate.of(2026,11,15),evidence.eventDate().date());
+    }
+
+    @Test
+    void registrationConfirmationDoesNotInventEventDateWhenItIsMissing() {
+        post.setText("Регистрация до 6 сентября. Дату мероприятия уточним позднее.");
+        metadata.setPostType(TelegramChannelPostType.EVENT);metadata.setDeadlineText("6 сентября");
+        confirm(LocalDate.of(2026,9,6));
+        var result=evaluator.evaluate(post,metadata);
+        assertEquals(TelegramChannelPostFreshnessStatus.UNKNOWN,result.status());assertNull(result.expiresAt());
+    }
+
     private void confirm(LocalDate date) {
         post.setConfirmedDate(date);post.setConfirmedDateBoundary(DateBoundaryType.INCLUSIVE);
         post.setConfirmedDatePurpose(ChannelPostDatePurpose.APPLICATION_DEADLINE);post.setConfirmedDateSourceHash(post.dateConfirmationSourceHash());

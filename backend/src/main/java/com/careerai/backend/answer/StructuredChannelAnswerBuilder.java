@@ -70,8 +70,12 @@ public class StructuredChannelAnswerBuilder {
                 String text = post.getText().replaceAll("\\s+", " ").strip();
                 if (text.length() > 160) text = text.substring(0, 160).stripTrailing() + "…";
                 answer.append(++number).append(". ").append(escape(text)).append("\n");
-                answer.append(effectiveDate(post).atZoneSameInstant(clock.getZone())
-                        .format(DateTimeFormatter.ofPattern("dd.MM.yyyy")));
+                OffsetDateTime publicationDate = post.getPostedAt() != null ? post.getPostedAt() : post.getCreatedAt();
+                if (publicationDate != null) {
+                    answer.append(language.select("Опубликовано: ", "Жарияланған күні: ", "Published: "));
+                    answer.append(publicationDate.atZoneSameInstant(clock.getZone())
+                            .format(DateTimeFormatter.ofPattern("dd.MM.yyyy")));
+                }
                 if (post.getFreshnessStatus() == TelegramChannelPostFreshnessStatus.UNKNOWN) {
                     answer.append(" · ").append(language.select("срок не подтверждён",
                             "мерзімі расталмаған", "expiry unconfirmed"));

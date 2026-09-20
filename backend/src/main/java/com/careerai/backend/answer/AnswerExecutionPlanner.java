@@ -33,7 +33,7 @@ public class AnswerExecutionPlanner {
 
     public Optional<String> directAnswer(String question, ChannelQueryAnalysis analysis) {
         if (analysis == null || analysis.intent() != ChannelSearchIntent.GENERAL_CHAT
-                || analysis.requiresTimelineSearch()
+                || analysis.requiresTimelineSearch() || analysis.hasEventDateRange()
                 || analysis.needsChannelPosts() || analysis.needsFaq() || analysis.needsDeadlines()
                 || !analysis.contentScopes().equals(List.of(ChannelContentScope.NONE))
                 || !SMALL_TALK.contains(normalize(question))) {

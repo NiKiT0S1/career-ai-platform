@@ -72,7 +72,7 @@ class BackendApplicationTests {
     }
 
     @Test void migrationAndEveryAdminListRunAgainstPostgres() throws Exception {
-        assertEquals("16",jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1",String.class));
+        assertEquals("17",jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1",String.class));
         for(String path:List.of("me","overview","posts","faqs","relations","candidates","audit","jobs")) {
             var response=send("GET",path,null,true);
             assertEquals(200,response.statusCode(),path+": "+response.body());

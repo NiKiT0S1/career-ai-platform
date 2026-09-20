@@ -14,6 +14,8 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
+import org.springframework.dao.OptimisticLockingFailureException;
 
 /**
  * Извлекает структурированную информацию из Telegram-поста через LLM.
@@ -62,8 +64,19 @@ public class TelegramChannelPostMetadataExtractorService {
             return;
         }
 
-        LlmRequest request = requestFactory.create(post.getText());
+        String sourceText = post.getText();
+        long sourceRevision = metadata.getRevision();
+        LlmRequest request = requestFactory.create(sourceText);
         LlmResponse response = llmProvider.execute(request);
+
+        // A Telegram edit can arrive while the model is extracting the previous text.
+        // Keep the new PENDING revision; do not overwrite it with old dates or a failure.
+        TelegramChannelPostMetadata current = metadataRepository.findByIdWithPost(metadataId).orElse(null);
+        if (current == null || current.getRevision() != sourceRevision || current.getPost() == null
+                || !Objects.equals(sourceText, current.getPost().getText())) {
+            log.info("Discarding stale channel metadata extraction. metadataId={}", metadataId);
+            return;
+        }
 
         if (response.failed()) {
             markAsFailed(
@@ -93,6 +106,9 @@ public class TelegramChannelPostMetadataExtractorService {
                     metadata.getTitle()
             );
         }
+        catch (OptimisticLockingFailureException e) {
+            log.info("Channel metadata changed while extraction was being saved. metadataId={}", metadataId);
+        }
         catch (Exception e) {
             markAsFailed(metadata, "Failed to parse extraction JSON: " + e.getMessage());
 
@@ -120,9 +136,15 @@ public class TelegramChannelPostMetadataExtractorService {
         metadata.setLevelText(limit(readNullableText(root, "levelText"), 255));
         metadata.setFormatText(limit(readNullableText(root, "formatText"), 255));
 
-        metadata.setDeadlineText(limit(readNullableText(root, "deadlineText"), 500));
-        metadata.setPracticeStartText(limit(readNullableText(root, "practiceStartText"), 255));
-        metadata.setPracticeEndText(limit(readNullableText(root, "practiceEndText"), 255));
+        String source = metadata.getPost().getText();
+        metadata.setDeadlineText(limit(EventTemporalEvidenceService.supportedQuote(source,
+                readNullableText(root, "deadlineText")), 500));
+        metadata.setEventDateText(limit(EventTemporalEvidenceService.supportedQuote(source,
+                readNullableText(root, "eventDateText")), 500));
+        metadata.setPracticeStartText(limit(EventTemporalEvidenceService.supportedQuote(source,
+                readNullableText(root, "practiceStartText")), 255));
+        metadata.setPracticeEndText(limit(EventTemporalEvidenceService.supportedQuote(source,
+                readNullableText(root, "practiceEndText")), 255));
 
         metadata.setSummary(readNullableText(root, "summary"));
         metadata.setRelevantForPractice(readBoolean(root, "relevantForPractice", false));
@@ -185,7 +207,7 @@ public class TelegramChannelPostMetadataExtractorService {
             for (JsonNode item : value) {
                 String text = item.asText();
 
-                if (text != null || !text.isBlank()) {
+                if (text != null && !text.isBlank()) {
                     items.add(text.trim());
                 }
             }
@@ -230,6 +252,7 @@ public class TelegramChannelPostMetadataExtractorService {
         metadata.setLevelText(null);
         metadata.setFormatText(null);
         metadata.setDeadlineText(null);
+        metadata.setEventDateText(null);
         metadata.setPracticeStartText(null);
         metadata.setPracticeEndText(null);
         metadata.setSummary("Текст поста отсутствует.");

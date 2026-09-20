@@ -6,6 +6,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import java.time.LocalDate;
 import java.time.Clock;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.*;
 
 @Service
@@ -51,13 +53,26 @@ public class AdminReadService {
     }
 
     public Map<String,Object> post(long id) {
-        var rows=jdbc.queryForList("SELECT id,telegram_chat_id,telegram_message_id,channel_title,channel_username,text,posted_at,edited_at,freshness_status,expires_at,freshness_reason,is_archived,archive_reason,revision FROM telegram_channel_posts WHERE id=?",id);
+        var rows=jdbc.queryForList("SELECT id,telegram_chat_id,telegram_message_id,channel_title,channel_username,text,posted_at,edited_at,freshness_status,expires_at,freshness_reason,is_archived,archive_reason,revision,confirmed_date,confirmed_date_boundary,confirmed_date_purpose,confirmed_date_source_hash,date_confirmed_by,date_confirmed_at,date_confirmation_reason FROM telegram_channel_posts WHERE id=?",id);
         if(rows.isEmpty())throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Публикация не найдена");
         var result=rows.getFirst();
+        var source=new com.careerai.backend.channel.TelegramChannelPost();
+        source.setText((String)result.get("text"));source.setPostedAt(timestamp(result.get("posted_at")));
+        source.setEditedAt(timestamp(result.get("edited_at")));
+        Object sourceHash=result.remove("confirmed_date_source_hash");
+        result.put("date_confirmation_current",result.get("confirmed_date")!=null
+                &&source.dateConfirmationSourceHash().equals(sourceHash));
         var metadata=jdbc.queryForList("SELECT id,post_type,title,company,technologies,level_text,format_text,deadline_text,practice_start_text,practice_end_text,summary,is_relevant_for_practice,extraction_status,extraction_error,revision FROM telegram_channel_post_metadata WHERE post_id=?",id);
         result.put("metadata",metadata.isEmpty()?null:metadata.getFirst());
         result.put("relations",jdbc.queryForList("SELECT id,source_post_id,target_post_id,relation_type,reason,relation_origin,classification_status,classification_confidence,entity_version FROM telegram_channel_post_relations WHERE source_post_id=? OR target_post_id=? ORDER BY id DESC",id,id));
         return result;
+    }
+
+    private static OffsetDateTime timestamp(Object value) {
+        if(value instanceof OffsetDateTime date)return date;
+        if(value instanceof java.sql.Timestamp date)return date.toInstant().atOffset(ZoneOffset.UTC);
+        if(value==null)return null;
+        throw new IllegalStateException("Неизвестный формат времени публикации");
     }
 
     public PageView faqs(String q,int page,int size) {

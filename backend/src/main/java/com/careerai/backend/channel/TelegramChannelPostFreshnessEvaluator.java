@@ -37,6 +37,15 @@ public class TelegramChannelPostFreshnessEvaluator {
             return unknown("Telegram-пост отсутствует");
         }
 
+        if (post.hasCurrentDateConfirmation()) {
+            return evaluateParsedDate(post.getConfirmedDate(), post.getConfirmedDateBoundary(),
+                    "подтверждено администратором: " + describePurpose(post.getConfirmedDatePurpose()));
+        }
+
+        if (post.getConfirmedDate() != null) {
+            return unknown("Исходная публикация изменена после подтверждения даты; требуется повторная проверка администратора");
+        }
+
         if (metadata == null) {
             return unknown("Для поста отсутствует структурированная metadata");
         }
@@ -62,11 +71,7 @@ public class TelegramChannelPostFreshnessEvaluator {
             );
 
             case EVENT -> evaluateDatedContent(
-                    joinText(
-                            metadata.getDeadlineText(),
-                            metadata.getTitle(),
-                            metadata.getSummary()
-                    ),
+                    null,
                     post.getText(),
                     referenceDate,
                     "дата мероприятия"
@@ -139,7 +144,7 @@ public class TelegramChannelPostFreshnessEvaluator {
 
         /*
          * EXCLUSIVE:
-         * "до 21 июля" перестаёт действовать 21 июля в 00:00.
+         * Явное "строго до"/"before" перестаёт действовать в начале дня.
          *
          * INCLUSIVE и UNSPECIFIED:
          * публикация действует весь указанный день.
@@ -239,7 +244,15 @@ public class TelegramChannelPostFreshnessEvaluator {
         return switch (boundaryType) {
             case EXCLUSIVE -> "дата не включается";
             case INCLUSIVE -> "дата включается";
-            case UNSPECIFIED -> "граница не указана, дата считается включительной";
+            case UNSPECIFIED -> "последний день однозначно не указан; для поиска используется конец дня, приём в этот день требует уточнения";
+        };
+    }
+
+    private String describePurpose(ChannelPostDatePurpose purpose) {
+        return switch (purpose) {
+            case APPLICATION_DEADLINE -> "срок подачи документов или заявки";
+            case EVENT_DATE -> "дата мероприятия";
+            case PRACTICE_END -> "окончание практики";
         };
     }
 
@@ -252,54 +265,6 @@ public class TelegramChannelPostFreshnessEvaluator {
             String originalPostText,
             LocalDate referenceDate
     ) {
-        DateParseResult metadataResult = dateParser.parse(
-                metadataText,
-                referenceDate
-        );
-
-        /*
-         * Если LLM вообще не смогла извлечь дату,
-         * пытаемся разобрать исходный Telegram-пост.
-         */
-        if (metadataResult.status() != DateParseStatus.PARSED) {
-            DateParseResult originalResult = dateParser.parse(
-                    originalPostText,
-                    referenceDate
-            );
-
-            if (originalResult.status() == DateParseStatus.PARSED) {
-                return originalResult;
-            }
-
-            return metadataResult;
-        }
-
-        /*
-         * Если metadata уже сохранила явную границу,
-         * ничего дополнительно искать не нужно.
-         */
-        if (metadataResult.boundaryType() != DateBoundaryType.UNSPECIFIED) {
-            return metadataResult;
-        }
-
-        /*
-         * LLM могла вернуть "21 июля" вместо "до 21 июля".
-         * Ищем именно эту дату в исходном тексте,
-         * даже если до неё в посте встречаются другие даты.
-         */
-        DateBoundaryType originalBoundary = dateParser.findBoundaryForDate(
-                originalPostText,
-                metadataResult.date(),
-                referenceDate
-        );
-
-        if (originalBoundary == DateBoundaryType.UNSPECIFIED) {
-            return metadataResult;
-        }
-
-        return DateParseResult.parsed(
-                metadataResult.date(),
-                originalBoundary
-        );
+        return dateParser.parseMatchingDate(originalPostText, metadataText, referenceDate);
     }
 }

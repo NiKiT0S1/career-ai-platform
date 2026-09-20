@@ -5,6 +5,11 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.time.OffsetDateTime;
+import java.time.LocalDate;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.Objects;
 
 /**
@@ -99,6 +104,56 @@ public class TelegramChannelPost {
      */
     @Column(name = "freshness_checked_at")
     private OffsetDateTime freshnessCheckedAt;
+
+    @Column(name = "confirmed_date")
+    private LocalDate confirmedDate;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "confirmed_date_boundary")
+    private DateBoundaryType confirmedDateBoundary;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "confirmed_date_purpose")
+    private ChannelPostDatePurpose confirmedDatePurpose;
+
+    @Column(name = "confirmed_date_source_hash", length = 64)
+    private String confirmedDateSourceHash;
+
+    @Column(name = "date_confirmed_by")
+    private Long dateConfirmedBy;
+
+    @Column(name = "date_confirmed_at")
+    private OffsetDateTime dateConfirmedAt;
+
+    @Column(name = "date_confirmation_reason", columnDefinition = "TEXT")
+    private String dateConfirmationReason;
+
+    public String dateConfirmationSourceHash() {
+        String source = Objects.toString(text, "") + "\u0000"
+                + (postedAt == null ? "" : postedAt.toInstant().toString()) + "\u0000"
+                + (editedAt == null ? "" : editedAt.toInstant().toString());
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(source.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 unavailable", impossible);
+        }
+    }
+
+    public boolean hasCurrentDateConfirmation() {
+        return confirmedDate != null && confirmedDatePurpose != null
+                && (confirmedDateBoundary == DateBoundaryType.INCLUSIVE || confirmedDateBoundary == DateBoundaryType.EXCLUSIVE)
+                && dateConfirmationSourceHash().equals(confirmedDateSourceHash);
+    }
+
+    public void clearDateConfirmation() {
+        confirmedDate = null;
+        confirmedDateBoundary = null;
+        confirmedDatePurpose = null;
+        confirmedDateSourceHash = null;
+        dateConfirmedBy = null;
+        dateConfirmedAt = null;
+        dateConfirmationReason = null;
+    }
 
     /**
      * Показывает, исключил ли администратор публикацию

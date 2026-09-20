@@ -47,7 +47,8 @@ class AdminAuthenticationFilterTest {
     static Stream<String> adminMutationRoutes() {
         return Stream.of("POST /api/admin/posts/1/archive", "POST /api/admin/posts/1/restore",
                 "POST /api/admin/posts/1/freshness", "POST /api/admin/posts/1/extract",
-                "PUT /api/admin/posts/1/metadata", "POST /api/admin/posts/1/reindex",
+                "PUT /api/admin/posts/1/metadata", "PUT /api/admin/posts/1/date-confirmation",
+                "POST /api/admin/posts/1/date-confirmation/revoke", "POST /api/admin/posts/1/reindex",
                 "POST /api/admin/posts/1/discover", "POST /api/admin/faqs", "PUT /api/admin/faqs/1",
                 "POST /api/admin/relations", "POST /api/admin/relations/1/confirm",
                 "POST /api/admin/relations/1/remove", "POST /api/admin/relations/1/retry",

@@ -53,7 +53,7 @@ public class MultilingualDateBoundaryDetector {
      * перед датой.
      */
     private static final Pattern EXCLUSIVE_BEFORE_PATTERN = Pattern.compile(
-            "(?iu).*(?:^|\\s)(?:до|before)\\s*$"
+            "(?iu).*(?:^|\\s)(?:строго\\s+до|раньше|ранее|before)\\s*$"
     );
 
     /*
@@ -61,7 +61,7 @@ public class MultilingualDateBoundaryDetector {
      * после даты: "21 шілдеге дейін".
      */
     private static final Pattern EXCLUSIVE_AFTER_PATTERN = Pattern.compile(
-            "(?iu)^[\\s(\\[]*(?:дейін|дейінгі)(?:\\s|[.,;:!?)]|$).*"
+            "(?iu)^[\\s(\\[]*(?:не\\s+включая(?:\\s+этот\\s+день)?|исключительно|exclusive)(?:\\s|[.,;:!?)]|$).*"
     );
 
     public DateBoundaryType detect(String text, int matchStart, int matchEnd) {

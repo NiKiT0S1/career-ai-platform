@@ -26,6 +26,16 @@ public class AdminController {
             @RequestParam(defaultValue="ALL")String type,@RequestParam(defaultValue="")String from,@RequestParam(defaultValue="")String to,
             @RequestParam(defaultValue="0")int page,@RequestParam(defaultValue="20")int size) {return read.posts(q,status,type,from,to,page,size);}
     @GetMapping("/posts/{id}") public Object post(@PathVariable long id) {return read.post(id);}
+    @PutMapping("/posts/{id}/date-confirmation") public Object confirmDate(@PathVariable long id,
+            @Valid @RequestBody AdminMutationService.DateConfirmationInput input,
+            @RequestAttribute(AdminAuthenticationFilter.IDENTITY)AdminIdentity who) {
+        mutations.confirmDate(who.userId(),id,input);return read.post(id);
+    }
+    @PostMapping("/posts/{id}/date-confirmation/revoke") public Object revokeDate(@PathVariable long id,
+            @Valid @RequestBody AdminMutationService.PostAction input,
+            @RequestAttribute(AdminAuthenticationFilter.IDENTITY)AdminIdentity who) {
+        mutations.revokeDate(who.userId(),id,input);return read.post(id);
+    }
     @PostMapping("/posts/{id}/{action:archive|restore|freshness|extract}") public Object postAction(@PathVariable long id,@PathVariable String action,
             @Valid @RequestBody AdminMutationService.PostAction input,@RequestAttribute(AdminAuthenticationFilter.IDENTITY)AdminIdentity who) {
         mutations.postAction(who.userId(),id,action,input);return read.post(id);

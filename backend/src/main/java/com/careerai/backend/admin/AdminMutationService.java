@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import java.time.Clock;
 import java.time.OffsetDateTime;
+import java.time.LocalDate;
 
 @Service
 public class AdminMutationService {
@@ -29,6 +30,9 @@ public class AdminMutationService {
         this.em=em;this.archives=archives;this.freshness=freshness;this.relations=relations;this.audit=audit;this.events=events;this.clock=clock;
     }
     public record PostAction(@NotNull @PositiveOrZero Long revision,@Size(max=2000) String reason) {}
+    public record DateConfirmationInput(@NotNull @PositiveOrZero Long revision,@NotNull LocalDate date,
+            @NotNull DateBoundaryType boundary,@NotNull ChannelPostDatePurpose purpose,
+            @NotBlank @Size(max=2000) String reason) {}
     public record FaqInput(@PositiveOrZero Long revision,@NotBlank @Size(max=100) String category,
             @NotBlank @Pattern(regexp="[a-z0-9][a-z0-9-]{0,149}") String slug,
             @NotBlank @Size(max=2000) String question,@NotBlank @Size(max=4000) String shortAnswer,
@@ -43,6 +47,40 @@ public class AdminMutationService {
             @Size(max=255) String levelText,@Size(max=255) String formatText,@Size(max=500) String deadlineText,
             @Size(max=255) String practiceStartText,@Size(max=255) String practiceEndText,
             @Size(max=10000) String summary,boolean relevantForPractice,@NotBlank @Size(max=2000) String reason) {}
+
+    @Transactional
+    public void confirmDate(long actor,long postId,DateConfirmationInput input) {
+        var post=required(TelegramChannelPost.class,postId);
+        check(post.getRevision(),input.revision());
+        if(input.date()==null||input.date().getYear()<1900||input.date().getYear()>9999)
+            throw new IllegalArgumentException("Укажите полную дату с годом от 1900 до 9999");
+        if(input.boundary()==null||input.boundary()==DateBoundaryType.UNSPECIFIED||input.purpose()==null)
+            throw new IllegalArgumentException("Подтвердите назначение даты и включается ли последний день");
+        requireReason(input.reason());
+        if(input.purpose()==ChannelPostDatePurpose.EVENT_DATE&&input.boundary()!=DateBoundaryType.INCLUSIVE)
+            throw new IllegalArgumentException("Дата мероприятия включает сам день мероприятия");
+        post.setConfirmedDate(input.date());post.setConfirmedDateBoundary(input.boundary());
+        post.setConfirmedDatePurpose(input.purpose());post.setConfirmedDateSourceHash(post.dateConfirmationSourceHash());
+        post.setDateConfirmedBy(actor);post.setDateConfirmedAt(OffsetDateTime.now(clock));
+        post.setDateConfirmationReason(input.reason().strip());
+        em.flush();freshness.recalculateOne(postId);
+        audit.record(actor,"date-confirm","post",postId,"date="+input.date()+"; boundary="+input.boundary()
+                +"; purpose="+input.purpose()+"; "+input.reason().strip());
+    }
+
+    @Transactional
+    public void revokeDate(long actor,long postId,PostAction input) {
+        var post=required(TelegramChannelPost.class,postId);
+        check(post.getRevision(),input.revision());requireReason(input.reason());
+        String previous="date="+post.getConfirmedDate()+"; purpose="+post.getConfirmedDatePurpose();
+        post.clearDateConfirmation();em.flush();freshness.recalculateOne(postId);
+        audit.record(actor,"date-revoke","post",postId,previous+"; "+input.reason().strip());
+    }
+
+    private static void requireReason(String reason) {
+        if(reason==null||reason.isBlank()||reason.length()>2000)
+            throw new IllegalArgumentException("Укажите основание подтверждения или отмены (до 2000 символов)");
+    }
 
     @Transactional
     public void metadata(long actor,long postId,MetadataInput input) {

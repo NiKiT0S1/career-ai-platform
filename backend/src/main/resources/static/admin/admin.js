@@ -121,6 +121,19 @@ async function openPost(id) {
   const m=p.metadata;
   const link=p.channel_username&&/^[A-Za-z0-9_]+$/.test(p.channel_username)?`https://t.me/${p.channel_username}/${p.telegram_message_id}`:null;
   showDialog(m?.title||'Публикация #'+p.id,`<div class="detail-meta">${badge(postStatus(p))}<span>${esc(p.channel_title)} · ${esc(date(p.posted_at))}</span></div><div class="post-body">${esc(p.text)}</div><p class="muted">${esc(p.freshness_reason||'Срок публикации ещё не определён')}${p.expires_at?' · Истекает '+esc(date(p.expires_at)):''}</p><div class="actions">${link?`<a class="btn" href="${link}" target="_blank" rel="noopener noreferrer">Открыть в Telegram ↗</a>`:''}<button class="btn ${p.is_archived?'primary':'danger'}" data-action="${p.is_archived?'restore-post':'archive-post'}">${p.is_archived?'Восстановить':'В архив'}</button><button class="btn" data-action="freshness-post">Проверить срок</button></div>${m?`<h3 class="actions">Данные публикации</h3><div class="post-body">Категория: ${esc(labels[m.post_type])}\nКомпания: ${esc(m.company||'—')}\nДедлайн: ${esc(m.deadline_text||'—')}\nФормат: ${esc(m.format_text||'—')}\n${esc(m.summary||'')}</div><div class="actions"><button class="btn" data-action="edit-metadata">Уточнить данные</button><button class="btn" data-action="extract-post">Повторить извлечение</button></div>`:''}<details><summary>Обслуживание публикации</summary><div class="actions"><button class="btn compact" data-action="reindex-post">Обновить поисковый индекс</button><button class="btn compact" data-action="discover-post">Найти связанные публикации</button></div></details>${p.relations?.length?`<h3 class="actions">Связанные публикации</h3>${p.relations.map(r=>`<p class="review-reason">#${r.source_post_id} → #${r.target_post_id}: ${esc(labels[r.relation_type])}. ${esc(r.reason)}</p>`).join('')}`:''}`,`ПУБЛИКАЦИЯ #${p.id}`);
+  $('dialog-content').insertAdjacentHTML('beforeend',dateConfirmationPanel(p));
+}
+function dateConfirmationPanel(p) {
+  const purposes={APPLICATION_DEADLINE:'Срок подачи документов или заявки',EVENT_DATE:'Дата мероприятия',PRACTICE_END:'Окончание практики'};
+  return `<h3 class="actions">Подтверждение даты</h3><p class="muted">Если год или последний день неясны, уточните их у автора объявления. Подтверждение относится к текущей редакции публикации.</p>${p.confirmed_date?`<div class="post-body">${p.date_confirmation_current?'Подтверждённая дата':'Прежняя дата: публикация изменена, подтвердите заново'}: ${esc(String(p.confirmed_date).slice(0,10))}\nНазначение: ${esc(purposes[p.confirmed_date_purpose]||p.confirmed_date_purpose)}\nПоследний день: ${p.confirmed_date_boundary==='INCLUSIVE'?'включается':'не включается'}\nОснование: ${esc(p.date_confirmation_reason)}\nПодтвердил: ${esc(p.date_confirmed_by)} · ${esc(date(p.date_confirmed_at))}</div>`:''}<div class="actions"><button class="btn" data-action="confirm-date">${p.confirmed_date?'Изменить подтверждение':'Подтвердить дату'}</button>${p.confirmed_date?'<button class="btn danger" data-action="revoke-date">Отменить подтверждение</button>':''}</div>`;
+}
+function editDateConfirmation(revoke=false) {
+  const p=state.post;
+  if(revoke){showDialog('Отменить подтверждение даты',`<form class="form-grid" data-form="date-revoke">${input('reason','Почему подтверждение больше не действует?','',{required:true,wide:true,textarea:true,max:2000})}${buttons('Отменить подтверждение')}</form>`);return;}
+  const purpose=p.confirmed_date_purpose||(p.metadata?.post_type==='EVENT'?'EVENT_DATE':p.metadata?.post_type==='PRACTICE'?'PRACTICE_END':'APPLICATION_DEADLINE');
+  showDialog('Подтвердить полную дату',`<form class="form-grid" data-form="date-confirmation"><p class="notice wide">Укажите дату с проверенным годом. Для мероприятия выбирайте день его проведения, а не публикации или окончания регистрации.</p>${input('date','Дата с годом',p.confirmed_date?String(p.confirmed_date).slice(0,10):'',{required:true,type:'date'})}<label>Назначение даты<select name="purpose">${Object.entries({APPLICATION_DEADLINE:'Срок подачи документов или заявки',EVENT_DATE:'Дата мероприятия',PRACTICE_END:'Окончание практики'}).map(([value,title])=>`<option value="${value}" ${value===purpose?'selected':''}>${title}</option>`).join('')}</select></label><label class="wide">Последний день<select name="boundary"><option value="INCLUSIVE" ${p.confirmed_date_boundary!=='EXCLUSIVE'?'selected':''}>Включается — до конца этого дня</option><option value="EXCLUSIVE" ${p.confirmed_date_boundary==='EXCLUSIVE'?'selected':''}>Не включается — до начала этого дня</option></select></label>${input('reason','Основание: кто уточнил дату или где она подтверждена','',{required:true,wide:true,textarea:true,max:2000})}${buttons('Подтвердить дату')}</form>`,'ПРОВЕРЕННАЯ ДАТА');
+  $('dialog-content').querySelector('[name=date]').min='1900-01-01';
+  $('dialog-content').querySelector('[name=date]').max='9999-12-31';
 }
 function editFaq(id) {
   const f=state.items.find(x=>x.id===id)||{};
@@ -141,6 +154,7 @@ async function action(name,id) {
   if(name==='view-post')return openPost(id);
   if(name==='new-faq'||name==='edit-faq')return editFaq(id);
   if(name==='edit-metadata')return editMetadata();
+  if(name==='confirm-date'||name==='revoke-date')return editDateConfirmation(name==='revoke-date');
   if(['confirm-relation','remove-relation','approve-candidate','reject-candidate','archive-post'].includes(name))return decision(name,id);
   if(name==='new-relation'){showDialog('Связать две публикации',`<form class="form-grid" data-form="link">${input('sourcePostId','ID уточнения (новая публикация)','',{required:true,type:'number'})}${input('targetPostId','ID основной публикации','',{required:true,type:'number'})}${typeSelect('type')}${input('reason','Что изменилось','',{required:true,wide:true,textarea:true})}${buttons('Создать связь')}</form>`);return;}
   if(name==='candidate-audit'){const entries=await api('/candidates/'+id+'/audit');showDialog('История решения',`<pre class="raw">${esc(JSON.stringify(entries,null,2))}</pre>`);return;}
@@ -168,6 +182,11 @@ $('dialog-content').addEventListener('submit',async event=>{
     }else if(form.dataset.form==='metadata') {
       data.revision=state.post.metadata.revision;data.relevantForPractice=data.relevantForPractice==='on';
       await api('/posts/'+state.post.id+'/metadata',{method:'PUT',body:JSON.stringify(data)});
+    }else if(form.dataset.form==='date-confirmation') {
+      data.revision=state.post.revision;
+      await api('/posts/'+state.post.id+'/date-confirmation',{method:'PUT',body:JSON.stringify(data)});
+    }else if(form.dataset.form==='date-revoke') {
+      await post('/posts/'+state.post.id+'/date-confirmation/revoke',{reason:data.reason,revision:state.post.revision});
     }else if(form.dataset.form==='link') {
       data.sourcePostId=Number(data.sourcePostId);data.targetPostId=Number(data.targetPostId);await post('/relations',data);
     }else {

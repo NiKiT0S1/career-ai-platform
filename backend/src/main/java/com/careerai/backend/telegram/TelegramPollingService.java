@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import java.util.Map;
 
 /**
  * Главный сервис для получения сообщений из Telegram через polling.
@@ -47,6 +48,7 @@ public class TelegramPollingService {
     private final TelegramChannelPostAnswerService telegramChannelPostAnswerService;
     private final FaqEntryService faqEntryService;
     private final TelegramAdminLaunchService adminLaunchService;
+    private final TelegramAdminMenuService adminMenuService;
 
     private long offset = 0;
     private boolean offsetInitialized = false;
@@ -62,7 +64,8 @@ public class TelegramPollingService {
                                   TelegramChannelPostService telegramChannelPostService,
                                   TelegramChannelPostAnswerService telegramChannelPostAnswerService,
                                   FaqEntryService faqEntryService,
-                                  TelegramAdminLaunchService adminLaunchService) {
+                                  TelegramAdminLaunchService adminLaunchService,
+                                  TelegramAdminMenuService adminMenuService) {
         this.telegramBotService = telegramBotService;
         this.objectMapper = objectMapper;
         this.llmProvider = llmProvider;
@@ -75,6 +78,7 @@ public class TelegramPollingService {
         this.telegramChannelPostAnswerService = telegramChannelPostAnswerService;
         this.faqEntryService = faqEntryService;
         this.adminLaunchService = adminLaunchService;
+        this.adminMenuService = adminMenuService;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -85,6 +89,7 @@ public class TelegramPollingService {
         offsetInitialized = true;
 
         log.info("Telegram polling offset initialized with value={}", offset);
+        adminMenuService.initialize();
     }
 
     @Scheduled(fixedDelay = 1000)
@@ -170,12 +175,19 @@ public class TelegramPollingService {
 
         String text = message.has("text") ? message.get("text").asText() : "";
         String normalizedText = text.trim();
+        String chatType = message.path("chat").path("type").asText();
+        JsonNode sender = message.path("from").path("id");
+        long senderId = sender.isIntegralNumber() && sender.canConvertToLong() ? sender.asLong() : 0;
+        adminMenuService.onInteraction(chatType, chatId, senderId);
+        Map<String, Object> replyMarkup = adminMenuService.replyMarkup(chatType, chatId, senderId);
+        String commandText = "private".equals(chatType)
+                ? TelegramAdminMenuService.commandForButton(normalizedText) : normalizedText;
 
         TelegramUser telegramUser = telegramUserService.findOrCreateFromMessage(message);
 
         if (normalizedText.isBlank()) {
             String response = "Пока я умею обрабатывать только текстовые сообщения.";
-            sendAndSavePlainMessage(telegramUser, chatId, response);
+            sendAndSavePlainMessage(telegramUser, chatId, response, replyMarkup);
             return;
         }
 
@@ -183,48 +195,46 @@ public class TelegramPollingService {
 
         log.info("Received Telegram message from chatId={}: {}", chatId, normalizedText);
 
-        if (isStartCommand(normalizedText)) {
-            sendAndSaveHtmlMessage(telegramUser, chatId, TelegramMessageTemplates.startMessage());
+        if (isStartCommand(commandText)) {
+            sendAndSaveHtmlMessage(telegramUser, chatId, TelegramMessageTemplates.startMessage(), replyMarkup);
             return;
         }
 
-        if (isHelpCommand(normalizedText)) {
-            sendAndSaveHtmlMessage(telegramUser, chatId, TelegramMessageTemplates.helpMessage());
+        if (isHelpCommand(commandText)) {
+            sendAndSaveHtmlMessage(telegramUser, chatId, TelegramMessageTemplates.helpMessage(), replyMarkup);
             return;
         }
 
-        if (isAboutCommand(normalizedText)) {
-            sendAndSaveHtmlMessage(telegramUser, chatId, TelegramMessageTemplates.aboutMessage());
+        if (isAboutCommand(commandText)) {
+            sendAndSaveHtmlMessage(telegramUser, chatId, TelegramMessageTemplates.aboutMessage(), replyMarkup);
             return;
         }
 
-        if (isFaqCommand(normalizedText)) {
-            sendAndSaveHtmlMessage(telegramUser, chatId, faqEntryService.buildFaqListMessage());
+        if (isFaqCommand(commandText)) {
+            sendAndSaveHtmlMessage(telegramUser, chatId, faqEntryService.buildFaqListMessage(), replyMarkup);
             return;
         }
 
-        if (isCommand(normalizedText, "myid")) {
+        if (isCommand(commandText, "myid")) {
             if (!"private".equals(message.path("chat").path("type").asText())) {
-                sendAndSavePlainMessage(telegramUser, chatId, "Напиши мне /myid в личном чате.");
+                sendAndSavePlainMessage(telegramUser, chatId, "Напиши мне /myid в личном чате.", replyMarkup);
                 return;
             }
             JsonNode userId = message.path("from").path("id");
             String response = userId.isIntegralNumber()
                     ? "Твой Telegram ID: " + userId.asLong()
                     : "Не удалось определить ID отправителя этого сообщения.";
-            sendAndSavePlainMessage(telegramUser, chatId, response);
+            sendAndSavePlainMessage(telegramUser, chatId, response, replyMarkup);
             return;
         }
 
-        if (isCommand(normalizedText, "admin")) {
-            JsonNode sender = message.path("from").path("id");
-            long senderId = sender.isIntegralNumber() && sender.canConvertToLong() ? sender.asLong() : 0;
+        if (isCommand(commandText, "admin")) {
             var launch = adminLaunchService.prepare(message.path("chat").path("type").asText(), senderId);
             if (launch.allowed()) {
                 telegramBotService.sendWebAppMessage(chatId, launch.message(), launch.webAppUrl());
                 chatMessageService.saveAssistantMessage(telegramUser, chatId, launch.message());
             } else {
-                sendAndSavePlainMessage(telegramUser, chatId, launch.message());
+                sendAndSavePlainMessage(telegramUser, chatId, launch.message(), replyMarkup);
             }
             return;
         }
@@ -235,27 +245,27 @@ public class TelegramPollingService {
             var channelPostAnswer = telegramChannelPostAnswerService.buildAnswerIfRelevant(normalizedText);
 
             if (channelPostAnswer.isPresent()) {
-                sendAndSaveHtmlMessage(telegramUser, chatId, channelPostAnswer.get());
+                sendAndSaveHtmlMessage(telegramUser, chatId, channelPostAnswer.get(), replyMarkup);
                 return;
             }
 
             LlmResponse response = llmProvider.generateAnswer(normalizedText);
-            sendAndSaveHtmlMessage(telegramUser, chatId, response.text());
+            sendAndSaveHtmlMessage(telegramUser, chatId, response.text(), replyMarkup);
         }
         finally {
             typingActionHandle.stop();
         }
     }
 
-    private void sendAndSaveHtmlMessage(TelegramUser telegramUser, long chatId, String text) {
+    private void sendAndSaveHtmlMessage(TelegramUser telegramUser, long chatId, String text, Map<String, Object> replyMarkup) {
         String sanitizedText = telegramHtmlSanitizer.sanitizeHtml(text);
 
-        telegramBotService.sendHtmlMessage(chatId, sanitizedText);
+        telegramBotService.sendHtmlMessage(chatId, sanitizedText, replyMarkup);
         chatMessageService.saveAssistantMessage(telegramUser, chatId, sanitizedText);
     }
 
-    private void sendAndSavePlainMessage(TelegramUser telegramUser, long chatId, String text) {
-        telegramBotService.sendMessage(chatId, text);
+    private void sendAndSavePlainMessage(TelegramUser telegramUser, long chatId, String text, Map<String, Object> replyMarkup) {
+        telegramBotService.sendMessage(chatId, text, replyMarkup);
         chatMessageService.saveAssistantMessage(telegramUser, chatId, text);
     }
 

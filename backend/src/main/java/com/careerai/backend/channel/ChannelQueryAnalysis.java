@@ -23,7 +23,9 @@ public record ChannelQueryAnalysis(
         ChannelTimeScope timeScope,
         ChannelFreshnessScope freshnessScope,
         LocalDate dateFrom,
-        LocalDate dateTo
+        LocalDate dateTo,
+        LocalDate eventDateFrom,
+        LocalDate eventDateTo
 ) {
 
     public ChannelQueryAnalysis {
@@ -38,6 +40,23 @@ public record ChannelQueryAnalysis(
         resultMode = resultMode == null
                 ? ChannelResultMode.RELEVANT
                 : resultMode;
+    }
+
+    public ChannelQueryAnalysis(ChannelSearchIntent intent, String topic, List<ChannelContentScope> contentScopes,
+                                ChannelResultMode resultMode, boolean needsChannelPosts, boolean needsFaq,
+                                boolean needsDeadlines, String directAnswer, ChannelTimeScope timeScope,
+                                ChannelFreshnessScope freshnessScope, LocalDate dateFrom, LocalDate dateTo) {
+        this(intent, topic, contentScopes, resultMode, needsChannelPosts, needsFaq, needsDeadlines, directAnswer,
+                timeScope, freshnessScope, dateFrom, dateTo, null, null);
+    }
+
+    public boolean hasEventDateRange() {
+        return eventDateFrom != null || eventDateTo != null;
+    }
+
+    public boolean hasValidEventDateRange() {
+        return eventDateFrom != null && eventDateTo != null && !eventDateFrom.isAfter(eventDateTo)
+                && eventDateFrom.getYear() >= 1970 && eventDateTo.getYear() <= 9998;
     }
 
     public ChannelQueryAnalysis(ChannelSearchIntent intent, String topic,

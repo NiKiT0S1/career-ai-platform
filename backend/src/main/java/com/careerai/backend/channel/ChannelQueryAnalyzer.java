@@ -33,6 +33,7 @@ public class ChannelQueryAnalyzer {
     private final ObjectMapper objectMapper;
     private final ChannelQueryAnalysisRequestFactory requestFactory;
     private final BoundedQueryCache<ChannelQueryAnalysis> cache;
+    private final Clock clock;
 
     public ChannelQueryAnalyzer(LlmProvider llmProvider, ObjectMapper objectMapper,
                                 ChannelQueryAnalysisRequestFactory requestFactory,
@@ -40,6 +41,7 @@ public class ChannelQueryAnalyzer {
         this.llmProvider = llmProvider;
         this.objectMapper = objectMapper;
         this.requestFactory = requestFactory;
+        this.clock = clock;
         this.cache = new BoundedQueryCache<>(cacheProperties.analysisSize(), cacheProperties.analysisTtlSeconds(), clock);
     }
 
@@ -48,8 +50,13 @@ public class ChannelQueryAnalyzer {
             return ChannelQueryAnalysis.unknown();
         }
 
-        ChannelQueryAnalysis cached = cache.get("analysis-v3", userMessage, () -> analyzeUncached(userMessage));
-        return cached == null ? ChannelQueryAnalysis.unknown() : cached;
+        ChannelQueryAnalysis cached = cache.get("analysis-v6", userMessage, () -> analyzeUncached(userMessage));
+        ChannelQueryAnalysis analysis = ChannelQueryPolicy.normalize(userMessage,
+                cached == null ? ChannelQueryAnalysis.unknown() : cached, LocalDate.now(clock));
+        log.info("Channel query policy applied. intent={}, scopes={}, needsDeadlines={}, timeScope={}, freshnessScope={}, dateFrom={}, dateTo={}, eventDateFrom={}, eventDateTo={}",
+                analysis.intent(), analysis.contentScopes(), analysis.needsDeadlines(), analysis.timeScope(),
+                analysis.freshnessScope(), analysis.dateFrom(), analysis.dateTo(), analysis.eventDateFrom(), analysis.eventDateTo());
+        return analysis;
     }
 
     public void invalidateAll() {
@@ -103,8 +110,9 @@ public class ChannelQueryAnalyzer {
             String json = extractJson(llmText);
             JsonNode root = objectMapper.readTree(json);
 
-            ChannelSearchIntent intent =
-                    parseIntent(readText(root, "intent"));
+            String rawIntent = readText(root, "intent");
+            boolean eventIntentAlias = isEventIntentAlias(rawIntent);
+            ChannelSearchIntent intent = parseIntent(rawIntent);
 
             String topic =
                     readNullableText(root, "topic");
@@ -132,6 +140,17 @@ public class ChannelQueryAnalyzer {
 
             List<ChannelContentScope> contentScopes =
                     parseContentScopes(root, intent);
+            if (eventIntentAlias) {
+                needsChannelPosts = true;
+                if ((!root.hasNonNull("contentScopes") && !root.hasNonNull("contentScope"))
+                        || contentScopes.equals(List.of(ChannelContentScope.NONE))) {
+                    contentScopes = List.of(ChannelContentScope.EVENTS);
+                } else if (!contentScopes.contains(ChannelContentScope.ALL_UPDATES)) {
+                    var eventScopes = new LinkedHashSet<>(contentScopes);
+                    eventScopes.add(ChannelContentScope.EVENTS);
+                    contentScopes = List.copyOf(eventScopes);
+                }
+            }
 
             ChannelResultMode resultMode =
                     parseResultMode(
@@ -140,10 +159,20 @@ public class ChannelQueryAnalyzer {
 
             ChannelTimeScope timeScope = parseTimeScope(readText(root, "timeScope"));
             ChannelFreshnessScope freshnessScope = parseFreshnessScope(readText(root, "freshnessScope"));
-            if (timeScope != ChannelTimeScope.ANY_TIME || freshnessScope != ChannelFreshnessScope.CURRENT) {
+            LocalDate publicationFrom = readDate(root, "dateFrom"), publicationTo = readDate(root, "dateTo");
+            LocalDate eventFrom = readDate(root, "eventDateFrom"), eventTo = readDate(root, "eventDateTo");
+            boolean eventRangeRequested = readNullableText(root, "eventDateFrom") != null
+                    || readNullableText(root, "eventDateTo") != null;
+            if (eventRangeRequested && eventFrom == null && eventTo == null) {
+                // Keep invalid explicit input on the validation path rather than treating it as no restriction.
+                timeScope = ChannelTimeScope.CUSTOM_RANGE;
+                publicationFrom = null;
+                publicationTo = null;
+            }
+            if (timeScope != ChannelTimeScope.ANY_TIME || freshnessScope != ChannelFreshnessScope.CURRENT || eventRangeRequested) {
                 needsChannelPosts = true;
                 if (contentScopes.equals(List.of(ChannelContentScope.NONE))) {
-                    contentScopes = List.of(ChannelContentScope.ALL_UPDATES);
+                    contentScopes = List.of(eventRangeRequested ? ChannelContentScope.EVENTS : ChannelContentScope.ALL_UPDATES);
                 }
             }
 
@@ -164,8 +193,10 @@ public class ChannelQueryAnalyzer {
                     readNullableText(root, "directAnswer"),
                     timeScope,
                     freshnessScope,
-                    readDate(root, "dateFrom"),
-                    readDate(root, "dateTo")
+                    publicationFrom,
+                    publicationTo,
+                    eventFrom,
+                    eventTo
             );
         }
         catch (Exception exception) {
@@ -227,12 +258,19 @@ public class ChannelQueryAnalyzer {
             return ChannelSearchIntent.UNKNOWN;
         }
 
+        // Recover only this known provider alias; arbitrary unsupported intents remain UNKNOWN.
+        if (isEventIntentAlias(value)) return ChannelSearchIntent.GENERAL_UPDATES;
+
         try {
             return ChannelSearchIntent.valueOf(value.trim().toUpperCase(Locale.ROOT));
         }
         catch (IllegalArgumentException e) {
             return ChannelSearchIntent.UNKNOWN;
         }
+    }
+
+    private boolean isEventIntentAlias(String value) {
+        return value != null && ("EVENT".equalsIgnoreCase(value.strip()) || "EVENTS".equalsIgnoreCase(value.strip()));
     }
 
     private ChannelContentScope parseContentScope(String value, ChannelSearchIntent intent) {

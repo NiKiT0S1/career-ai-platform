@@ -23,6 +23,10 @@ public class ChannelPostTimelineSearchService {
     }
 
     public ChannelPostSearchResult search(ChannelQueryAnalysis analysis, int totalLimit) {
+        return search(analysis, totalLimit, null);
+    }
+
+    public ChannelPostSearchResult search(ChannelQueryAnalysis analysis, int totalLimit, String userQuestion) {
         Optional<ChannelQueryWindowResolver.Window> window = windows.resolve(analysis);
         if (window.isEmpty() || !analysis.needsChannelPosts()) return ChannelPostSearchResult.empty();
         List<ChannelContentScope> scopes = analysis.contentScopes().stream()
@@ -30,41 +34,61 @@ public class ChannelPostTimelineSearchService {
         List<ChannelPostSearchGroup> groups = new ArrayList<>();
         int remaining = Math.max(1, totalLimit);
         OffsetDateTime now = OffsetDateTime.now(clock);
+        DeadlineEvidenceTerms terms = analysis.needsDeadlines()
+                ? DeadlineEvidenceTerms.fromQuestion(userQuestion) : DeadlineEvidenceTerms.fromQuestion(null);
         for (int index = 0; index < scopes.size() && remaining > 0; index++) {
             ChannelContentScope scope = scopes.get(index);
             int limit = Math.max(1, remaining / (scopes.size() - index));
-            List<TelegramChannelPost> posts = repository.findInWindow(types(scope), scope == ChannelContentScope.PRACTICE,
+            boolean filterTerms = filterTermsForScope(terms, scope, scopes.size());
+            List<TelegramChannelPostType> selectedTypes = scope == ChannelContentScope.PRACTICE && analysis.needsDeadlines()
+                    ? List.of(TelegramChannelPostType.PRACTICE, TelegramChannelPostType.DEADLINE) : types(scope);
+            List<TelegramChannelPost> posts = repository.findInWindow(selectedTypes, scope == ChannelContentScope.PRACTICE,
                     analysis.freshnessScope().name(), window.get().fromInclusive(), window.get().toExclusive(), now,
-                    PageRequest.of(0, limit)).stream()
+                    PageRequest.of(0, filterTerms ? Math.max(limit, 200) : limit)).stream()
                     // Keep safety at the service boundary as well as in SQL.
-                    .filter(post -> matches(post, analysis.freshnessScope(), window.get(), now)).limit(limit).toList();
+                    .filter(post -> matches(post, analysis.freshnessScope(), window.get(), now))
+                    .filter(post -> !filterTerms || terms.matches(post)).limit(limit).toList();
             groups.add(new ChannelPostSearchGroup(scope, posts));
             remaining -= posts.size();
         }
         // Related corrections may lie outside the requested publication window. They are context,
         // not additional matching announcements; all are labelled separately in the RAG prompt.
-        return relations.expand(new ChannelPostSearchResult(groups), ChannelPostTimelineSearchService::allowedHistoricalContext);
+        ChannelPostSearchResult result = relations.expand(new ChannelPostSearchResult(groups),
+                ChannelPostTimelineSearchService::allowedHistoricalContext);
+        if (analysis.needsDeadlines()) {
+            return ChannelPostContextMerger.merge(result, searchDeadlineKnowledge(analysis, totalLimit, userQuestion));
+        }
+        return result;
     }
 
     /** Supplement a deadline question, without turning expired opportunities into current offers. */
     public ChannelPostSearchResult searchDeadlineKnowledge(ChannelQueryAnalysis analysis, int totalLimit) {
+        return searchDeadlineKnowledge(analysis, totalLimit, null);
+    }
+
+    public ChannelPostSearchResult searchDeadlineKnowledge(ChannelQueryAnalysis analysis, int totalLimit, String userQuestion) {
         Optional<ChannelQueryWindowResolver.Window> window = windows.resolve(analysis);
         if (window.isEmpty() || !analysis.needsChannelPosts()) return ChannelPostSearchResult.empty();
         List<ChannelContentScope> scopes = analysis.contentScopes().stream()
                 .filter(scope -> scope != ChannelContentScope.NONE).toList();
         List<ChannelPostSearchGroup> groups = new ArrayList<>();
         int remaining = Math.max(1, totalLimit);
+        DeadlineEvidenceTerms terms = DeadlineEvidenceTerms.fromQuestion(userQuestion);
+        OffsetDateTime now = OffsetDateTime.now(clock);
         for (int index = 0; index < scopes.size() && remaining > 0; index++) {
             ChannelContentScope scope = scopes.get(index);
             int limit = Math.max(1, remaining / (scopes.size() - index));
             // A generic document-extension notice can be classified DEADLINE rather than PRACTICE.
+            // In a mixed question, a Java vacancy constraint must not hide the common practice deadline.
+            boolean filterTerms = filterTermsForScope(terms, scope, scopes.size());
             List<TelegramChannelPostType> deadlineTypes = scope == ChannelContentScope.PRACTICE
                     ? List.of(TelegramChannelPostType.PRACTICE, TelegramChannelPostType.DEADLINE) : types(scope);
             List<TelegramChannelPost> posts = repository.findDeadlineKnowledge(deadlineTypes,
                     scope == ChannelContentScope.PRACTICE, window.get().fromInclusive(), window.get().toExclusive(),
-                    PageRequest.of(0, limit)).stream()
-                    .filter(ChannelPostTimelineSearchService::allowedHistoricalContext)
-                    .filter(post -> window.get().contains(publicationDate(post))).limit(limit).toList();
+                    PageRequest.of(0, filterTerms ? Math.max(limit, 200) : limit)).stream()
+                    .filter(post -> matches(post, analysis.freshnessScope() == ChannelFreshnessScope.EXPIRED
+                            ? ChannelFreshnessScope.EXPIRED : ChannelFreshnessScope.ALL, window.get(), now))
+                    .filter(post -> !filterTerms || terms.matches(post)).limit(limit).toList();
             groups.add(new ChannelPostSearchGroup(scope, posts));
             remaining -= posts.size();
         }
@@ -78,6 +102,11 @@ public class ChannelPostTimelineSearchService {
                 || (post.getExpiresAt() != null && !post.getExpiresAt().isAfter(now));
         return freshness == ChannelFreshnessScope.ALL
                 || (freshness == ChannelFreshnessScope.EXPIRED ? expired : !expired);
+    }
+
+    private static boolean filterTermsForScope(DeadlineEvidenceTerms terms, ChannelContentScope scope, int scopeCount) {
+        return !terms.isEmpty() && scope != ChannelContentScope.PRACTICE && scope != ChannelContentScope.ALL_UPDATES
+                && (scope == ChannelContentScope.VACANCIES || scopeCount == 1);
     }
 
     static boolean allowedHistoricalContext(TelegramChannelPost post) {

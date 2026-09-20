@@ -102,6 +102,91 @@ class ChannelPostTimelineSearchServiceTest {
         verifyNoInteractions(repository, relations);
     }
 
+    @Test
+    void currentPublicationWindowIncludesExpiredDeadlineEvidenceOnlyInsideThatWindow() {
+        var repository = mock(ChannelPostTimelineRepository.class);
+        var relations = mock(TelegramChannelPostRelationExpansionService.class);
+        var expiredYesterday = post(20);
+        expiredYesterday.setFreshnessStatus(TelegramChannelPostFreshnessStatus.EXPIRED);
+        expiredYesterday.setPostedAt(now.minusDays(1));
+        var outsideWindow = post(21);
+        outsideWindow.setFreshnessStatus(TelegramChannelPostFreshnessStatus.EXPIRED);
+        outsideWindow.setPostedAt(now.minusDays(2));
+        when(repository.findInWindow(anyCollection(), anyBoolean(), anyString(), any(), any(), any(), any()))
+                .thenReturn(List.of());
+        when(repository.findDeadlineKnowledge(anyCollection(), anyBoolean(), any(), any(), any()))
+                .thenReturn(List.of(expiredYesterday, outsideWindow));
+        when(relations.expand(any(), any())).thenAnswer(invocation -> invocation.getArgument(0));
+        var service = new ChannelPostTimelineSearchService(repository, new ChannelQueryWindowResolver(clock), relations, clock);
+        var analysis = new ChannelQueryAnalysis(ChannelSearchIntent.PRACTICE, null,
+                List.of(ChannelContentScope.PRACTICE), ChannelResultMode.RELEVANT, true, true, true, null,
+                ChannelTimeScope.YESTERDAY, ChannelFreshnessScope.CURRENT, null, null);
+        var result = service.search(analysis, 8, "Что вчера писали про документы на практику, я ещё успеваю?");
+        assertEquals(List.of(expiredYesterday), result.allPosts());
+        var window = new ChannelQueryWindowResolver(clock).resolve(analysis).orElseThrow();
+        verify(repository).findDeadlineKnowledge(eq(List.of(TelegramChannelPostType.PRACTICE, TelegramChannelPostType.DEADLINE)),
+                eq(true), eq(window.fromInclusive()), eq(window.toExclusive()), any());
+    }
+
+    @Test
+    void requestedJavaDeadlineIsFoundBehindEightNewerUnrelatedPostsWithoutUsingInventedTopic() {
+        var repository = mock(ChannelPostTimelineRepository.class);
+        var relations = mock(TelegramChannelPostRelationExpansionService.class);
+        List<TelegramChannelPost> candidates = new ArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            var python = post(i + 20); python.setText("Python internship deadline 1 September 2026");
+            python.setFreshnessStatus(TelegramChannelPostFreshnessStatus.EXPIRED); candidates.add(python);
+        }
+        var java = post(100); java.setText("Java Developer: документы до 7 сентября 2026 года");
+        java.setPostedAt(now.minusDays(30)); java.setFreshnessStatus(TelegramChannelPostFreshnessStatus.EXPIRED);
+        candidates.add(java);
+        when(repository.findDeadlineKnowledge(anyCollection(), anyBoolean(), any(), any(), any()))
+                .thenAnswer(invocation -> candidates.stream().limit(((Pageable) invocation.getArgument(4)).getPageSize()).toList());
+        when(relations.expand(any(), any())).thenAnswer(invocation -> invocation.getArgument(0));
+        var service = new ChannelPostTimelineSearchService(repository, new ChannelQueryWindowResolver(clock), relations, clock);
+        var analysis = new ChannelQueryAnalysis(ChannelSearchIntent.VACANCY, "invented_python_topic",
+                List.of(ChannelContentScope.VACANCIES), ChannelResultMode.RELEVANT, true, false, true);
+        assertEquals(List.of(java), service.searchDeadlineKnowledge(analysis, 8, "Дедлайн Java-вакансии уже прошёл?").allPosts());
+        verify(repository).findDeadlineKnowledge(anyCollection(), eq(false), any(), any(),
+                argThat(page -> page.getPageSize() == 200));
+    }
+
+    @Test
+    void explicitExpiredDeadlineNeverReturnsCurrentPostsFromSupplement() {
+        var repository = mock(ChannelPostTimelineRepository.class);
+        var relations = mock(TelegramChannelPostRelationExpansionService.class);
+        var expired = post(20); expired.setText("Java vacancy deadline");
+        expired.setFreshnessStatus(TelegramChannelPostFreshnessStatus.EXPIRED);
+        var current = post(21); current.setText("Java vacancy deadline");
+        current.setFreshnessStatus(TelegramChannelPostFreshnessStatus.ACTIVE);
+        when(repository.findInWindow(anyCollection(), anyBoolean(), anyString(), any(), any(), any(), any()))
+                .thenReturn(List.of(current, expired));
+        when(repository.findDeadlineKnowledge(anyCollection(), anyBoolean(), any(), any(), any()))
+                .thenReturn(List.of(current, expired));
+        when(relations.expand(any(), any())).thenAnswer(invocation -> invocation.getArgument(0));
+        var service = new ChannelPostTimelineSearchService(repository, new ChannelQueryWindowResolver(clock), relations, clock);
+        var analysis = new ChannelQueryAnalysis(ChannelSearchIntent.VACANCY, null,
+                List.of(ChannelContentScope.VACANCIES), ChannelResultMode.RELEVANT, true, false, true, null,
+                ChannelTimeScope.ANY_TIME, ChannelFreshnessScope.EXPIRED, null, null);
+        assertEquals(List.of(expired), service.search(analysis, 8, "Покажи истёкшие дедлайны Java-вакансий").allPosts());
+    }
+
+    @Test
+    void javaVacancyConstraintDoesNotHideGeneralPracticeDocumentDeadlineInMixedQuestion() {
+        var repository = mock(ChannelPostTimelineRepository.class);
+        var relations = mock(TelegramChannelPostRelationExpansionService.class);
+        var java = post(20); java.setText("Java vacancy deadline 7 September");
+        var practice = post(21); practice.setText("Документы на практику до 7 сентября");
+        when(repository.findDeadlineKnowledge(anyCollection(), eq(false), any(), any(), any())).thenReturn(List.of(java));
+        when(repository.findDeadlineKnowledge(anyCollection(), eq(true), any(), any(), any())).thenReturn(List.of(practice));
+        when(relations.expand(any(), any())).thenAnswer(invocation -> invocation.getArgument(0));
+        var service = new ChannelPostTimelineSearchService(repository, new ChannelQueryWindowResolver(clock), relations, clock);
+        var analysis = new ChannelQueryAnalysis(ChannelSearchIntent.VACANCY, "java",
+                List.of(ChannelContentScope.VACANCIES, ChannelContentScope.PRACTICE), ChannelResultMode.RELEVANT, true, true, true);
+        assertEquals(List.of(java, practice), service.searchDeadlineKnowledge(analysis, 8,
+                "Какие Java-вакансии и до какого числа документы на практику?").allPosts());
+    }
+
     private TelegramChannelPost post(int id) {
         var post = new TelegramChannelPost();
         post.setId((long) id);

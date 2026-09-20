@@ -53,7 +53,9 @@ public class ChannelQueryAnalysisRequestFactory {
               "timeScope": "TODAY|YESTERDAY|LAST_7_DAYS|CUSTOM_RANGE|ANY_TIME",
               "freshnessScope": "CURRENT|EXPIRED|ALL",
               "dateFrom": null,
-              "dateTo": null
+              "dateTo": null,
+              "eventDateFrom": null,
+              "eventDateTo": null
             }
 
             Правила intent:
@@ -68,6 +70,7 @@ public class ChannelQueryAnalysisRequestFactory {
             - PRACTICE — производственная практика, документы и её оформление;
             - DEADLINE — основной смысл вопроса заключается в сроках или датах;
             - GENERAL_UPDATES — общие новости, новые объявления и изменения в канале;
+            - для мероприятий intent=GENERAL_UPDATES и contentScopes=["EVENTS"]; значения EVENT/EVENTS запрещены в intent;
             - FAQ — стабильные правила, процедуры, услуги, документы и контакты Центра;
             - UNKNOWN — тему нельзя надёжно определить.
 
@@ -102,13 +105,29 @@ public class ChannelQueryAnalysisRequestFactory {
             - в остальных случаях используй RELEVANT.
 
             Правила периода и актуальности (независимые параметры):
+            - разговорные "ща", "щас", "ивенты", опечатки и RU/KZ/EN не меняют смысл темы;
+            - "Какие ивенты ща проходят? Или какие будут?" и "Какие мероприятия будут?" -> EVENTS, ANY_TIME, CURRENT;
+            - "What evnts are happening now or coming up?" -> intent=GENERAL_UPDATES, contentScopes=["EVENTS"],
+              timeScope=ANY_TIME, freshnessScope=CURRENT, eventDateFrom=eventDateTo=null;
+            - "now / upcoming / coming up / сейчас / будут / алдағы" без явных календарных дат не ограничивают события сегодняшним днём;
+            - "Документы на практику до какого числа сдать?" -> PRACTICE, needsChannelPosts=true, needsFaq=true, needsDeadlines=true;
+            - "Какой дедлайн был? / What was the deadline? / Мерзімі қашан болған?" -> needsDeadlines=true, freshnessScope=ALL;
+            - слово "успеваю / too late / үлгеремін" в вопросе о документах требует проверки сроков, включая прошедшие;
+            - не теряй категории составного вопроса: вакансии + практика + документы требуют VACANCIES и PRACTICE, FAQ и сроков;
             - timeScope фильтрует ДАТУ ПУБЛИКАЦИИ, а не дату события или дедлайн;
             - "посты сегодня / today / бүгінгі жарияланымдар" -> TODAY;
             - "новости вчера / yesterday / кешегі жаңалықтар" -> YESTERDAY;
             - "публикации за последние 7 дней" -> LAST_7_DAYS (сегодня и шесть предыдущих дней);
             - явный диапазон публикаций -> CUSTOM_RANGE с dateFrom/dateTo в формате YYYY-MM-DD, обе даты включительно;
             - для остальных случаев timeScope=ANY_TIME, dateFrom=dateTo=null;
-            - "мероприятие завтра" задаёт дату события, а не публикации: timeScope=ANY_TIME, смысл сохраняется в topic;
+            - eventDateFrom/eventDateTo задают ДАТЫ ПРОВЕДЕНИЯ мероприятий в YYYY-MM-DD, обе границы включительно;
+            - "мероприятие завтра" -> timeScope=ANY_TIME, eventDateFrom=eventDateTo=завтрашняя дата;
+            - "Какие мероприятия были с 10 июля по 10 августа 2026?" -> timeScope=ANY_TIME,
+              eventDateFrom="2026-07-10", eventDateTo="2026-08-10", freshnessScope=ALL;
+            - для мероприятия сегодня / yesterday / бүгін используй точные eventDateFrom/eventDateTo, не дату публикации;
+            - если одновременно заданы период публикации и даты проведения, сохрани оба независимых диапазона;
+            - если период проведения не запрошен, eventDateFrom=eventDateTo=null;
+            - не переставляй обратные границы диапазона: приложение должно сообщить о неверном периоде;
             - freshnessScope=CURRENT по умолчанию: действующие и записи с неподтверждённым сроком;
             - EXPIRED только при явной просьбе об истёкших/прошедших предложениях;
             - ALL при явной просьбе включить действующие и истёкшие, либо узнать, что было опубликовано в прошлом независимо от актуальности;
